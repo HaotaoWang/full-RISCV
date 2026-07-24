@@ -22,11 +22,7 @@ module FPGA_Top_tb;
     initial sys_clk = 0;
     always #5 sys_clk = ~sys_clk;
 
-    always @(posedge sys_clk) begin
-        if (fpga.soc_inst.cpu_core.pc != 0) begin
-            $display("Time: %0t, PC: %h, x1: %h, x6: %h", $time, fpga.soc_inst.cpu_core.pc, fpga.soc_inst.cpu_core.register_file.registers[1], fpga.soc_inst.cpu_core.register_file.registers[6]);
-        end
-    end
+    // removed PC dump
 
     initial begin
         $dumpfile("fpga_top_test.vcd");
@@ -40,7 +36,7 @@ module FPGA_Top_tb;
         sys_rst_n = 1;
 
         // 运行足够时间
-        #5000;
+        #500000;
 
         // 打印结果
         $display("========================================");
@@ -57,7 +53,6 @@ module FPGA_Top_tb;
             $display(" [FAIL] 验证失败! LED is %08b", led);
         end
         $display("========================================");
-
         $finish;
     end
 

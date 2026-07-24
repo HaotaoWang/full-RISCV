@@ -43,24 +43,36 @@ module RV32I46F5SPMMIO #(
     output wire mmio_uart_tx_start,
     output wire [3:0] mmio_led,
 
-    // --- 新增：指令取指 (IF) AXI4-Lite Master 接口 ---
+    // --- 新增：指令取指 (IF) Full AXI4 Master 接口 (用于 ICache) ---
     output        m_axi_if_awvalid,
     input         m_axi_if_awready,
     output [31:0] m_axi_if_awaddr,
+    output [ 3:0] m_axi_if_awid,
+    output [ 7:0] m_axi_if_awlen,
+    output [ 1:0] m_axi_if_awburst,
     output [ 2:0] m_axi_if_awprot,
     output        m_axi_if_wvalid,
     input         m_axi_if_wready,
     output [31:0] m_axi_if_wdata,
     output [ 3:0] m_axi_if_wstrb,
+    output        m_axi_if_wlast,
     input         m_axi_if_bvalid,
+    input  [ 1:0] m_axi_if_bresp,
+    input  [ 3:0] m_axi_if_bid,
     output        m_axi_if_bready,
     output        m_axi_if_arvalid,
     input         m_axi_if_arready,
     output [31:0] m_axi_if_araddr,
+    output [ 3:0] m_axi_if_arid,
+    output [ 7:0] m_axi_if_arlen,
+    output [ 1:0] m_axi_if_arburst,
     output [ 2:0] m_axi_if_arprot,
     input         m_axi_if_rvalid,
     output        m_axi_if_rready,
     input  [31:0] m_axi_if_rdata,
+    input  [ 1:0] m_axi_if_rresp,
+    input  [ 3:0] m_axi_if_rid,
+    input         m_axi_if_rlast,
 
     // --- 新增：数据访存 (MEM) AXI4-Lite Master 接口 ---
     output        m_axi_mem_awvalid,
@@ -563,26 +575,58 @@ module RV32I46F5SPMMIO #(
 	    .raw_imm(raw_imm)
     );
 
-    // 【已拆除旧版 InstructionMemory】
-    // 替换为 Instruction AXI Adapter
-    RV32_AXI_Adapter inst_axi_adapter (
-        .clk(clk),
-        .reset(reset),
-        // AXI Interfaces
-        .axi_awvalid(m_axi_if_awvalid), .axi_awready(m_axi_if_awready), .axi_awaddr(m_axi_if_awaddr), .axi_awprot(m_axi_if_awprot),
-        .axi_wvalid(m_axi_if_wvalid), .axi_wready(m_axi_if_wready), .axi_wdata(m_axi_if_wdata), .axi_wstrb(m_axi_if_wstrb),
-        .axi_bvalid(m_axi_if_bvalid), .axi_bready(m_axi_if_bready),
-        .axi_arvalid(m_axi_if_arvalid), .axi_arready(m_axi_if_arready), .axi_araddr(m_axi_if_araddr), .axi_arprot(m_axi_if_arprot),
-        .axi_rvalid(m_axi_if_rvalid), .axi_rready(m_axi_if_rready), .axi_rdata(m_axi_if_rdata),
-        // CPU Interfaces
-        .mem_valid(if_valid),
-        .mem_instr(1'b1), // 1 means Instruction Access
-        .mem_addr(pc),
-        .mem_wdata(32'b0),
-        .mem_wstrb(4'b0000), // Always read
-        .mem_ready(if_ready),
-        .mem_rdata(im_instruction)
+    // 【已拆除旧版 InstructionMemory 和 RV32_AXI_Adapter】
+    // 替换为 ultraembedded 提供的 ICache 模块
+    icache #(
+        .AXI_ID(0)
+    ) icache_inst (
+        .clk_i(clk),
+        .rst_i(reset),
+        
+        // --- CPU 侧接口 ---
+        .req_rd_i(if_valid),
+        .req_flush_i(1'b0),
+        .req_invalidate_i(1'b0),
+        .req_pc_i(next_pc), // 使用 next_pc 实现零延迟预取
+        .req_accept_o(), // 暂不使用，CPU 会一直保持 valid 直到 ready
+        .req_valid_o(if_ready),
+        .req_error_o(), // 暂不处理取指错误异常
+        .req_inst_o(im_instruction),
+
+        // --- AXI4 侧接口 ---
+        .axi_awvalid_o(m_axi_if_awvalid),
+        .axi_awready_i(m_axi_if_awready),
+        .axi_awaddr_o(m_axi_if_awaddr),
+        .axi_awid_o(m_axi_if_awid),
+        .axi_awlen_o(m_axi_if_awlen),
+        .axi_awburst_o(m_axi_if_awburst),
+        .axi_wvalid_o(m_axi_if_wvalid),
+        .axi_wready_i(m_axi_if_wready),
+        .axi_wdata_o(m_axi_if_wdata),
+        .axi_wstrb_o(m_axi_if_wstrb),
+        .axi_wlast_o(m_axi_if_wlast),
+        .axi_bvalid_i(m_axi_if_bvalid),
+        .axi_bready_o(m_axi_if_bready),
+        .axi_bresp_i(m_axi_if_bresp),
+        .axi_bid_i(m_axi_if_bid),
+        
+        .axi_arvalid_o(m_axi_if_arvalid),
+        .axi_arready_i(m_axi_if_arready),
+        .axi_araddr_o(m_axi_if_araddr),
+        .axi_arid_o(m_axi_if_arid),
+        .axi_arlen_o(m_axi_if_arlen),
+        .axi_arburst_o(m_axi_if_arburst),
+        .axi_rvalid_i(m_axi_if_rvalid),
+        .axi_rready_o(m_axi_if_rready),
+        .axi_rdata_i(m_axi_if_rdata),
+        .axi_rresp_i(m_axi_if_rresp),
+        .axi_rid_i(m_axi_if_rid),
+        .axi_rlast_i(m_axi_if_rlast)
     );
+
+    // ICache 不输出 prot 信号，我们手动补齐 AXI4 协议要求的保护类型信号 (100 表示指令读取)
+    assign m_axi_if_arprot = 3'b100;
+    assign m_axi_if_awprot = 3'b000;
 
     MMIO_Interface mmio_interface (
         .clk(clk),
