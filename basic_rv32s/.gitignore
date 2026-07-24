@@ -1,0 +1,14 @@
+goorm.manifest
+.vscode/
+
+# 忽略仿真生成的大文件
+*.vcd
+*.vvp
+*.vvp
+*.vcd
+*.log
+*.jou
+*.txt
+*.hex
+/fpga/Vivado_Project/
+/.Xil/

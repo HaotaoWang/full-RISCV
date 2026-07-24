@@ -1,0 +1,9 @@
+
+*.vvp
+*.vcd
+*.log
+*.jou
+*.txt
+*.hex
+/basic_rv32s/fpga/Vivado_Project/
+.Xil/
