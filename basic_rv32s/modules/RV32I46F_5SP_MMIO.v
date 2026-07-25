@@ -18,7 +18,8 @@
 `include "modules/CSR_File.v"
 `include "modules/Exception_Detector.v"
 `include "modules/Trap_Controller.v"
-`include "modules/RV32_AXI_Adapter.v" // 新增：AXI 适配器
+// `include "modules/RV32_AXI_Adapter.v" // 已废弃，替换为 DCache
+// DCache 等模块由 Vivado 工程文件或 test.sh 统一添加，避免头文件级联依赖问题
 
 `include "modules/IF_ID_Register.v"
 `include "modules/ID_EX_Register.v"
@@ -74,24 +75,36 @@ module RV32I46F5SPMMIO #(
     input  [ 3:0] m_axi_if_rid,
     input         m_axi_if_rlast,
 
-    // --- 新增：数据访存 (MEM) AXI4-Lite Master 接口 ---
+    // --- 新增：数据访存 (MEM) Full AXI4 Master 接口 (用于 DCache) ---
     output        m_axi_mem_awvalid,
     input         m_axi_mem_awready,
     output [31:0] m_axi_mem_awaddr,
+    output [ 3:0] m_axi_mem_awid,
+    output [ 7:0] m_axi_mem_awlen,
+    output [ 1:0] m_axi_mem_awburst,
     output [ 2:0] m_axi_mem_awprot,
     output        m_axi_mem_wvalid,
     input         m_axi_mem_wready,
     output [31:0] m_axi_mem_wdata,
     output [ 3:0] m_axi_mem_wstrb,
+    output        m_axi_mem_wlast,
     input         m_axi_mem_bvalid,
+    input  [ 1:0] m_axi_mem_bresp,
+    input  [ 3:0] m_axi_mem_bid,
     output        m_axi_mem_bready,
     output        m_axi_mem_arvalid,
     input         m_axi_mem_arready,
     output [31:0] m_axi_mem_araddr,
+    output [ 3:0] m_axi_mem_arid,
+    output [ 7:0] m_axi_mem_arlen,
+    output [ 1:0] m_axi_mem_arburst,
     output [ 2:0] m_axi_mem_arprot,
     input         m_axi_mem_rvalid,
     output        m_axi_mem_rready,
-    input  [31:0] m_axi_mem_rdata
+    input  [31:0] m_axi_mem_rdata,
+    input  [ 1:0] m_axi_mem_rresp,
+    input  [ 3:0] m_axi_mem_rid,
+    input         m_axi_mem_rlast
 );
 
     // MMIO Interface
@@ -425,28 +438,85 @@ module RV32I46F5SPMMIO #(
         .csr_ready(csr_ready) 
     );
 
-    // 【已拆除旧版 DataMemory】
-    // 替换为 Data AXI Adapter
-    assign mem_valid = (MEM_memory_write && !mmio_uart_status_hit) || MEM_memory_read;
+    // =====================================================================
+    // 数据端缓存 (DCache) 与 MMIO 旁路逻辑
+    // =====================================================================
     
-    RV32_AXI_Adapter data_axi_adapter (
-        .clk(clk),
-        .reset(reset),
-        // AXI Interfaces
-        .axi_awvalid(m_axi_mem_awvalid), .axi_awready(m_axi_mem_awready), .axi_awaddr(m_axi_mem_awaddr), .axi_awprot(m_axi_mem_awprot),
-        .axi_wvalid(m_axi_mem_wvalid), .axi_wready(m_axi_mem_wready), .axi_wdata(m_axi_mem_wdata), .axi_wstrb(m_axi_mem_wstrb),
-        .axi_bvalid(m_axi_mem_bvalid), .axi_bready(m_axi_mem_bready),
-        .axi_arvalid(m_axi_mem_arvalid), .axi_arready(m_axi_mem_arready), .axi_araddr(m_axi_mem_araddr), .axi_arprot(m_axi_mem_arprot),
-        .axi_rvalid(m_axi_mem_rvalid), .axi_rready(m_axi_mem_rready), .axi_rdata(m_axi_mem_rdata),
-        // CPU Interfaces
-        .mem_valid(mem_valid),
-        .mem_instr(1'b0), // 0 means Data Access
-        .mem_addr(MEM_alu_result),
-        .mem_wdata(data_memory_write_data),
-        .mem_wstrb(write_mask), // write_mask from ByteEnableLogic (0000 for read)
-        .mem_ready(mem_ready),
-        .mem_rdata(data_memory_read_data)
+    // 如果是正常的 RAM 访存请求（即非 MMIO 命中），则送入 DCache
+    wire dcache_mem_rd = MEM_memory_read && !mmio_uart_status_hit;
+    wire [3:0] dcache_mem_wr = (MEM_memory_write && !mmio_uart_status_hit) ? write_mask : 4'b0000;
+    
+    // 仅当是访问外设时为 0（目前所有走 AXI 的请求默认都是 RAM，故 cacheable 设为 1）
+    wire dcache_mem_cacheable = 1'b1; 
+    
+    // Pipeline 需要的 mem_valid：用于告诉 HazardUnit 目前是否处于访存状态
+    assign mem_valid = (MEM_memory_write || MEM_memory_read);
+
+    wire dcache_mem_ack;
+    wire dcache_mem_accept;
+    
+    // mem_ready 用于解除流水线停顿。
+    // 如果是 MMIO 命中，由于采用了旁路逻辑（1个周期内直接出结果），无需等待，直接 ready = 1
+    // 否则，等待 DCache 的 ack
+    assign mem_ready = mmio_uart_status_hit ? 1'b1 : dcache_mem_ack;
+
+    dcache #(
+        .AXI_ID(1) // 与 ICache (ID=0) 区分
+    ) dcache_inst (
+        .clk_i(clk),
+        .rst_i(reset),
+        
+        // --- CPU 侧接口 ---
+        .mem_addr_i(MEM_alu_result),
+        .mem_data_wr_i(data_memory_write_data),
+        .mem_rd_i(dcache_mem_rd),
+        .mem_wr_i(dcache_mem_wr),
+        .mem_cacheable_i(dcache_mem_cacheable),
+        .mem_req_tag_i(11'b0),
+        .mem_invalidate_i(1'b0),
+        .mem_writeback_i(1'b0),
+        .mem_flush_i(1'b0),
+        
+        .mem_data_rd_o(data_memory_read_data),
+        .mem_accept_o(dcache_mem_accept),
+        .mem_ack_o(dcache_mem_ack),
+        .mem_error_o(), // 暂不处理总线异常
+        .mem_resp_tag_o(),
+
+        // --- AXI4 侧接口 ---
+        .axi_awvalid_o(m_axi_mem_awvalid),
+        .axi_awready_i(m_axi_mem_awready),
+        .axi_awaddr_o(m_axi_mem_awaddr),
+        .axi_awid_o(m_axi_mem_awid),
+        .axi_awlen_o(m_axi_mem_awlen),
+        .axi_awburst_o(m_axi_mem_awburst),
+        .axi_wvalid_o(m_axi_mem_wvalid),
+        .axi_wready_i(m_axi_mem_wready),
+        .axi_wdata_o(m_axi_mem_wdata),
+        .axi_wstrb_o(m_axi_mem_wstrb),
+        .axi_wlast_o(m_axi_mem_wlast),
+        .axi_bvalid_i(m_axi_mem_bvalid),
+        .axi_bready_o(m_axi_mem_bready),
+        .axi_bresp_i(m_axi_mem_bresp),
+        .axi_bid_i(m_axi_mem_bid),
+        
+        .axi_arvalid_o(m_axi_mem_arvalid),
+        .axi_arready_i(m_axi_mem_arready),
+        .axi_araddr_o(m_axi_mem_araddr),
+        .axi_arid_o(m_axi_mem_arid),
+        .axi_arlen_o(m_axi_mem_arlen),
+        .axi_arburst_o(m_axi_mem_arburst),
+        .axi_rvalid_i(m_axi_mem_rvalid),
+        .axi_rready_o(m_axi_mem_rready),
+        .axi_rdata_i(m_axi_mem_rdata),
+        .axi_rresp_i(m_axi_mem_rresp),
+        .axi_rid_i(m_axi_mem_rid),
+        .axi_rlast_i(m_axi_mem_rlast)
     );
+
+    // 补充 dcache 不输出的 AXI 保护类型信号（000: Unprivileged, secure, data access）
+    assign m_axi_mem_arprot = 3'b000;
+    assign m_axi_mem_awprot = 3'b000;
 
     ExceptionDetector exception_detector (
         .clk(clk),

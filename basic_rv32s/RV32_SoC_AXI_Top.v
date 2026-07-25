@@ -23,7 +23,8 @@
 `timescale 1ns / 1ps
 
 module RV32_SoC_AXI_Top #(
-    parameter RAM_ADDR_WIDTH = 16  // 2^16 = 64KB RAM
+    parameter RAM_ADDR_WIDTH = 16, // 2^16 = 64KB RAM
+    parameter INIT_FILE = ""       // 内存初始化文件
 )(
     input  wire clk,
     input  wire rst,
@@ -34,7 +35,10 @@ module RV32_SoC_AXI_Top #(
     output wire        mmio_uart_tx_start,
 
     // Debug: 退休指令观测口
-    output wire [31:0] retire_instruction
+    output wire [31:0] retire_instruction,
+    
+    // Board LED 输出
+    output wire [3:0]  mmio_led
 );
 
     // =====================================================================
@@ -80,39 +84,39 @@ module RV32_SoC_AXI_Top #(
     wire [ 2:0] cpu_if_arprot  = 3'b100;
     wire [ 3:0] cpu_if_arqos   = 4'b0;
 
-    // --- CPU MEM (数据) AXI Master 信号 (AXI-Lite) ---
+    // --- CPU MEM (数据) Full AXI4 Master 信号 (用于 DCache) ---
     wire        cpu_mem_awvalid, cpu_mem_awready;
     wire [31:0] cpu_mem_awaddr;
+    wire [ 3:0] cpu_mem_awid;
+    wire [ 7:0] cpu_mem_awlen;
+    wire [ 1:0] cpu_mem_awburst;
     wire [ 2:0] cpu_mem_awprot;
     wire        cpu_mem_wvalid,  cpu_mem_wready;
     wire [31:0] cpu_mem_wdata;
     wire [ 3:0] cpu_mem_wstrb;
+    wire        cpu_mem_wlast;
     wire        cpu_mem_bvalid,  cpu_mem_bready;
+    wire [ 1:0] cpu_mem_bresp;
+    wire [ 3:0] cpu_mem_bid;
     wire        cpu_mem_arvalid, cpu_mem_arready;
     wire [31:0] cpu_mem_araddr;
+    wire [ 3:0] cpu_mem_arid;
+    wire [ 7:0] cpu_mem_arlen;
+    wire [ 1:0] cpu_mem_arburst;
     wire [ 2:0] cpu_mem_arprot;
     wire        cpu_mem_rvalid,  cpu_mem_rready;
     wire [31:0] cpu_mem_rdata;
-    wire [ 3:0] cpu_mem_bid;
-    wire [ 1:0] cpu_mem_bresp;
-    wire [ 3:0] cpu_mem_rid;
     wire [ 1:0] cpu_mem_rresp;
+    wire [ 3:0] cpu_mem_rid;
     wire        cpu_mem_rlast;
 
-    // --- CPU MEM AXI-Lite to Full AXI Ties ---
-    wire [ 3:0] cpu_mem_awid    = 4'b0;
-    wire [ 7:0] cpu_mem_awlen   = 8'b0;
+    // --- CPU MEM missing AXI signals (tied off) ---
     wire [ 2:0] cpu_mem_awsize  = 3'b010;
-    wire [ 1:0] cpu_mem_awburst = 2'b01;
     wire        cpu_mem_awlock  = 1'b0;
     wire [ 3:0] cpu_mem_awcache = 4'b0;
     wire [ 3:0] cpu_mem_awqos   = 4'b0;
-    wire        cpu_mem_wlast   = 1'b1;
     
-    wire [ 3:0] cpu_mem_arid    = 4'b0;
-    wire [ 7:0] cpu_mem_arlen   = 8'b0;
     wire [ 2:0] cpu_mem_arsize  = 3'b010;
-    wire [ 1:0] cpu_mem_arburst = 2'b01;
     wire        cpu_mem_arlock  = 1'b0;
     wire [ 3:0] cpu_mem_arcache = 4'b0;
     wire [ 3:0] cpu_mem_arqos   = 4'b0;
@@ -163,6 +167,7 @@ module RV32_SoC_AXI_Top #(
         .retire_instruction(retire_instruction),
         .mmio_uart_tx_data(mmio_uart_tx_data),
         .mmio_uart_tx_start(mmio_uart_tx_start),
+        .mmio_led(mmio_led),
 
         // IF AXI Master
         .m_axi_if_awvalid(cpu_if_awvalid),
@@ -197,20 +202,32 @@ module RV32_SoC_AXI_Top #(
         .m_axi_mem_awvalid(cpu_mem_awvalid),
         .m_axi_mem_awready(cpu_mem_awready),
         .m_axi_mem_awaddr(cpu_mem_awaddr),
+        .m_axi_mem_awid(cpu_mem_awid),
+        .m_axi_mem_awlen(cpu_mem_awlen),
+        .m_axi_mem_awburst(cpu_mem_awburst),
         .m_axi_mem_awprot(cpu_mem_awprot),
         .m_axi_mem_wvalid(cpu_mem_wvalid),
         .m_axi_mem_wready(cpu_mem_wready),
         .m_axi_mem_wdata(cpu_mem_wdata),
         .m_axi_mem_wstrb(cpu_mem_wstrb),
+        .m_axi_mem_wlast(cpu_mem_wlast),
         .m_axi_mem_bvalid(cpu_mem_bvalid),
         .m_axi_mem_bready(cpu_mem_bready),
+        .m_axi_mem_bresp(cpu_mem_bresp),
+        .m_axi_mem_bid(cpu_mem_bid),
         .m_axi_mem_arvalid(cpu_mem_arvalid),
         .m_axi_mem_arready(cpu_mem_arready),
         .m_axi_mem_araddr(cpu_mem_araddr),
+        .m_axi_mem_arid(cpu_mem_arid),
+        .m_axi_mem_arlen(cpu_mem_arlen),
+        .m_axi_mem_arburst(cpu_mem_arburst),
         .m_axi_mem_arprot(cpu_mem_arprot),
         .m_axi_mem_rvalid(cpu_mem_rvalid),
         .m_axi_mem_rready(cpu_mem_rready),
-        .m_axi_mem_rdata(cpu_mem_rdata)
+        .m_axi_mem_rdata(cpu_mem_rdata),
+        .m_axi_mem_rresp(cpu_mem_rresp),
+        .m_axi_mem_rid(cpu_mem_rid),
+        .m_axi_mem_rlast(cpu_mem_rlast)
     );
 
     // =====================================================================
@@ -315,10 +332,12 @@ module RV32_SoC_AXI_Top #(
     //  模块实例化 3: AXI RAM (统一内存)
     // =====================================================================
     
-    axi_ram #(
+    // 使用带有初始化功能的 AXI RAM
+    axi_ram_init #(
         .DATA_WIDTH(32),
         .ADDR_WIDTH(RAM_ADDR_WIDTH),
-        .ID_WIDTH(4)
+        .ID_WIDTH(4),
+        .INIT_FILE(INIT_FILE)
     ) main_memory (
         .clk(clk),
         .rst(rst),
