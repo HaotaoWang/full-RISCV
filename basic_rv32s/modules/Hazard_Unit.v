@@ -79,6 +79,9 @@ module HazardUnit (
     assign store_hazard_mem = is_store && mem_hazard_rs2;
     assign store_hazard_wb = is_store && wb_hazard_rs2 && !mem_hazard_rs2;
     
+    // Load-Use hazard detection
+    wire load_use_hazard = (EX_opcode == `OPCODE_LOAD) && (EX_rd != 5'd0) && ((EX_rd == ID_rs1) || (EX_rd == ID_rs2));
+    
     // CSR hazard detection
     assign csr_hazard_mem = MEM_csr_write_enable && (MEM_csr_write_address == EX_imm);
     assign csr_hazard_wb = WB_csr_write_enable && (WB_csr_write_address == EX_imm);
@@ -160,6 +163,10 @@ module HazardUnit (
             // Note: Control_Unit will automatically assert pc_stall when IF_ID_stall is 1
             // CRITICAL: We must insert a bubble into ID_EX, otherwise the instruction in ID
             // will be duplicated endlessly into EX while IF is stalled!
+            ID_EX_flush = 1'b1;
+        end else if (load_use_hazard) begin
+            // Load-Use Hazard: Stall IF and ID, insert bubble in EX
+            IF_ID_stall = 1'b1;
             ID_EX_flush = 1'b1;
         end
     end
