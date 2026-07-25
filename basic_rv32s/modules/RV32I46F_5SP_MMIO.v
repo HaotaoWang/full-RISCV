@@ -201,7 +201,7 @@ module RV32I46F5SPMMIO #(
 
     // Exception_Detector
     wire trapped;
-    wire [2:0]  trap_status;
+    wire [3:0]  trap_status;
 
     // Trap Controller
     wire trap_done;
@@ -424,6 +424,9 @@ module RV32I46F5SPMMIO #(
         .csr_write_enable(cu_csr_write_enable)
     );
 
+    wire [1:0] current_mode;
+    wire [XLEN-1:0] medeleg;
+
     CSRFile #(.XLEN(XLEN)) csr_file (
         .clk(clk),
         .reset(reset),
@@ -435,7 +438,9 @@ module RV32I46F5SPMMIO #(
         .instruction_retired(instruction_retired),
 
         .csr_read_out(csr_read_out),
-        .csr_ready(csr_ready) 
+        .csr_ready(csr_ready),
+        .current_mode(current_mode),
+        .medeleg_out(medeleg)
     );
 
     // =====================================================================
@@ -527,6 +532,7 @@ module RV32I46F5SPMMIO #(
         .EX_funct3(EX_funct3),
         .MEM_opcode(MEM_opcode),
         .MEM_funct3(MEM_funct3),
+        .current_mode(current_mode),
         .raw_imm(raw_imm[11:0]),
         .EX_raw_imm(EX_raw_imm[11:0]),
         .csr_write_enable(cu_csr_write_enable),
@@ -760,6 +766,8 @@ module RV32I46F5SPMMIO #(
         .MEM_pc(MEM_pc),
         .WB_pc(WB_pc),
         .csr_read_data(csr_read_out),
+        .current_mode(current_mode),
+        .medeleg(medeleg),
 
         .debug_mode(debug_mode),
         .trap_target(trap_target),

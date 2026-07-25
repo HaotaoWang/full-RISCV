@@ -63,8 +63,8 @@ module FPGA_Top (
 
     RV32_SoC_AXI_Top_FPGA #(
         .RAM_ADDR_WIDTH(16),
-        .INIT_FILE("led_test_axi.hex")
-        //.INIT_FILE("simple_led_test.hex")
+        .INIT_FILE("smode_test.hex")
+        //.INIT_FILE("led_test_axi.hex")
     ) soc_inst (
         .clk(cpu_clk),
         .rst(cpu_rst),

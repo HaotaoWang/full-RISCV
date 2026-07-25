@@ -9,8 +9,10 @@ module TrapController #(
     input wire [XLEN-1:0] EX_pc,
     input wire [XLEN-1:0] MEM_pc,
     input wire [XLEN-1:0] WB_pc,
-    input wire [2:0] trap_status,      // indicates current trap type
+    input wire [3:0] trap_status,      // indicates current trap type
     input wire [XLEN-1:0] csr_read_data,
+    input wire [1:0] current_mode,     // 3 for M-Mode, 1 for S-Mode, 0 for U-Mode
+    input wire [XLEN-1:0] medeleg,     // exception delegation register
 
     output reg [XLEN-1:0] trap_target,      // trap handler base address output
     output reg ic_clean,         // instruction cache reset signal for zifencei
@@ -25,19 +27,43 @@ module TrapController #(
     output reg standby_mode
 );
 
+// Exception Cause Code Mapping
+reg [4:0] exception_cause;
+always @(*) begin
+    if (trap_status == `TRAP_EBREAK) exception_cause = 5'd3;
+    else if (trap_status == `TRAP_ECALL) begin
+        if (current_mode == 2'b11) exception_cause = 5'd11;
+        else if (current_mode == 2'b01) exception_cause = 5'd9;
+        else exception_cause = 5'd8;
+    end
+    else if (trap_status == `TRAP_MISALIGNED_LOAD) exception_cause = 5'd4;
+    else if (trap_status == `TRAP_MISALIGNED_STORE) exception_cause = 5'd6;
+    else exception_cause = 5'd0; // TRAP_MISALIGNED_INSTRUCTION
+end
+
+wire delegated_to_s = (current_mode <= 2'b01) && medeleg[exception_cause];
+
 // FSM States
 localparam  IDLE          = 4'b0000,
-            WRITE_MEPC    = 4'b0001,
-            WRITE_MCAUSE  = 4'b0010,
-            READ_MTVEC    = 4'b0011,
-            READ_MEPC     = 4'b0100,
-            GOTO_MTVEC    = 4'b0101,
+            WRITE_EPC     = 4'b0001,
+            WRITE_CAUSE   = 4'b0010,
+            READ_TVEC     = 4'b0011,
+            GOTO_TVEC     = 4'b0100,
+            
+            READ_MEPC     = 4'b0101,
             RETURN_MRET   = 4'b0110,
+            
+            READ_SEPC     = 4'b0111,
+            RETURN_SRET   = 4'b1000,
 
-            MEM_STANDBY   = 4'b0111,
-            WB_STANDBY    = 4'b1000,
-            RTRE_STANDBY  = 4'b1001,
-            ECALL_MEPC_WRITE    = 4'b1010;
+            MEM_STANDBY   = 4'b1001,
+            WB_STANDBY    = 4'b1010,
+            RTRE_STANDBY  = 4'b1011,
+            ECALL_EPC_WRITE = 4'b1100,
+            UPDATE_MODE   = 4'b1101,
+            
+            MRET_POP      = 4'b1110,
+            SRET_POP      = 4'b1111;
 
 // traditional FSM state architecture
 reg [3:0] trap_handle_state, next_trap_handle_state;
@@ -58,7 +84,7 @@ always @(posedge clk or posedge reset) begin
                 end
             end
             `TRAP_EBREAK: begin
-                if (trap_handle_state == WRITE_MCAUSE) begin
+                if (trap_handle_state == WRITE_CAUSE) begin
                     debug_mode_reg <= 1'b1;
                 end
             end
@@ -105,9 +131,14 @@ always @(*) begin
             case (trap_handle_state)
                 IDLE: begin 
                     if (trap_status == `TRAP_MRET) begin
-                        csr_trap_address = 12'h341; //mepc
+                        csr_trap_address = 12'h341; // mepc
                         trap_done = 1'b0;
                         next_trap_handle_state = READ_MEPC;
+
+                    end else if (trap_status == `TRAP_SRET) begin
+                        csr_trap_address = 12'h141; // sepc
+                        trap_done = 1'b0;
+                        next_trap_handle_state = READ_SEPC;
 
                     end else if (trap_status == `TRAP_ECALL) begin
                         standby_mode = 1'b1;
@@ -115,12 +146,12 @@ always @(*) begin
                         next_trap_handle_state = MEM_STANDBY;
 
                     end else begin
-                        // write current pc value to mepc CSR
+                        // write current pc value to EPC CSR
                         csr_write_enable = 1'b1;
-                        csr_trap_address = 12'h341; //mepc
+                        csr_trap_address = delegated_to_s ? 12'h141 : 12'h341; // sepc or mepc
                         csr_trap_write_data = MEM_pc;
                         trap_done = 1'b0;
-                        next_trap_handle_state = WRITE_MEPC;
+                        next_trap_handle_state = WRITE_EPC;
                     end
                 end
 
@@ -139,53 +170,56 @@ always @(*) begin
                 RTRE_STANDBY: begin
                     standby_mode = 1'b1;
                     trap_done = 1'b0;
-                    next_trap_handle_state = ECALL_MEPC_WRITE;
+                    next_trap_handle_state = ECALL_EPC_WRITE;
                 end
 
-                ECALL_MEPC_WRITE: begin
+                ECALL_EPC_WRITE: begin
                     standby_mode = 1'b0;
-                    // write current pc value to mepc CSR
+                    // write current pc value to EPC CSR
                     csr_write_enable = 1'b1;
-                    csr_trap_address = 12'h341; //mepc
+                    csr_trap_address = delegated_to_s ? 12'h141 : 12'h341; // sepc or mepc
                     csr_trap_write_data = EX_pc;
                     trap_done = 1'b0;
-                    next_trap_handle_state = WRITE_MEPC;
+                    next_trap_handle_state = WRITE_EPC;
                 end
 
-                WRITE_MEPC: begin 
-                    // write mcause code value for each trap type
+                WRITE_EPC: begin 
+                    // write cause code value
                     csr_write_enable = 1'b1;
-                    csr_trap_address = 12'h342; //mcause
-                    if (trap_status == `TRAP_EBREAK)    csr_trap_write_data = 32'd3;
-                    else if (trap_status == `TRAP_ECALL)    csr_trap_write_data = 32'd11;
-                    else if (trap_status == `TRAP_MISALIGNED_LOAD) csr_trap_write_data = 32'd4;
-                    else if (trap_status == `TRAP_MISALIGNED_STORE) csr_trap_write_data = 32'd6;
-                    //else if (trap_status == `TRAP_ILLEGAL_INSTRUCTION) csr_trap_write_data = 32'd2; 
-                    else csr_trap_write_data = 32'd0; // TRAP_MISALIGNED_INSTRUCTION
-                    
+                    csr_trap_address = delegated_to_s ? 12'h142 : 12'h342; // scause or mcause
+                    csr_trap_write_data = {27'b0, exception_cause};
                     trap_done = 1'b0;
-                    next_trap_handle_state = WRITE_MCAUSE;
+                    next_trap_handle_state = UPDATE_MODE;
+                end
+                
+                UPDATE_MODE: begin
+                    // tell CSR_File to update mode (via custom interface address 0x800)
+                    csr_write_enable = 1'b1;
+                    csr_trap_address = 12'h800; // custom current_mode change
+                    csr_trap_write_data = delegated_to_s ? 32'b01 : 32'b11; // go to S-mode or M-mode
+                    trap_done = 1'b0;
+                    next_trap_handle_state = WRITE_CAUSE;
                 end
 
-                WRITE_MCAUSE: begin
+                WRITE_CAUSE: begin
                     // Enable debug mode for EBREAK and PTH escape
                     if (trap_status == `TRAP_EBREAK) begin
                         trap_done = 1'b1;
                         next_trap_handle_state = IDLE;
                     end
                     else begin
-                        // ECALL, ILLEGAL/MISALIGNED_INSTRUCTION : read mtvec trap handler CSR value
+                        // ECALL, ILLEGAL/MISALIGNED_INSTRUCTION : read tvec trap handler CSR value
                         csr_write_enable = 1'b0;
-                        csr_trap_address = 12'h305; // mtvec
+                        csr_trap_address = delegated_to_s ? 12'h105 : 12'h305; // stvec or mtvec
                         trap_target = csr_read_data;
                         trap_done = 1'b0;
-                        next_trap_handle_state = READ_MTVEC;
+                        next_trap_handle_state = READ_TVEC;
                     end
                 end
 
-                READ_MTVEC: begin
-                    // keep mtvec value output
-                    csr_trap_address = 12'h305; // mtvec
+                READ_TVEC: begin
+                    // keep tvec value output
+                    csr_trap_address = delegated_to_s ? 12'h105 : 12'h305;
                     trap_target = csr_read_data;
                     if (trap_status == `TRAP_MISALIGNED_INSTRUCTION) begin
                         misaligned_instruction_flush = 1'b1;
@@ -194,12 +228,12 @@ always @(*) begin
                     end
                     trap_done = 1'b1;
                     pth_done_flush = 1'b1;
-                    next_trap_handle_state = GOTO_MTVEC;
+                    next_trap_handle_state = GOTO_TVEC;
                 end
 
-                GOTO_MTVEC: begin
-                    // keep mtvec value output
-                    csr_trap_address = 12'h305; // mtvec
+                GOTO_TVEC: begin
+                    // keep tvec value output
+                    csr_trap_address = delegated_to_s ? 12'h105 : 12'h305;
                     trap_target = csr_read_data;
                     if (trap_status == `TRAP_MISALIGNED_INSTRUCTION) begin
                         misaligned_instruction_flush = 1'b1;
@@ -212,17 +246,46 @@ always @(*) begin
                 end
 
                 READ_MEPC: begin
-                    // keep mepc value output
+                    // keep mepc value output to read PC, but first tell CSR_File to pop mode
+                    csr_write_enable = 1'b1;
+                    csr_trap_address = 12'h801; // custom MRET pop
+                    trap_done = 1'b0;
+                    next_trap_handle_state = MRET_POP;
+                end
+                
+                MRET_POP: begin
+                    csr_write_enable = 1'b0;
                     csr_trap_address = 12'h341; // mepc
-                    trap_target = ({csr_read_data[31:2], 2'b0} + 4);    // For preventing misaligned instruction address
+                    trap_target = {csr_read_data[31:2], 2'b0};
                     trap_done = 1'b0;
                     next_trap_handle_state = RETURN_MRET;
                 end
 
                 RETURN_MRET: begin
-                    // keep mepc value output
                     csr_trap_address = 12'h341; // mepc
-                    trap_target = ({csr_read_data[31:2], 2'b0} + 4);    // For preventing misaligned instruction address
+                    trap_target = {csr_read_data[31:2], 2'b0};
+                    trap_done = 1'b1;
+                    next_trap_handle_state = IDLE;
+                end
+
+                READ_SEPC: begin
+                    csr_write_enable = 1'b1;
+                    csr_trap_address = 12'h802; // custom SRET pop
+                    trap_done = 1'b0;
+                    next_trap_handle_state = SRET_POP;
+                end
+                
+                SRET_POP: begin
+                    csr_write_enable = 1'b0;
+                    csr_trap_address = 12'h141; // sepc
+                    trap_target = {csr_read_data[31:2], 2'b0};
+                    trap_done = 1'b0;
+                    next_trap_handle_state = RETURN_SRET;
+                end
+
+                RETURN_SRET: begin
+                    csr_trap_address = 12'h141; // sepc
+                    trap_target = {csr_read_data[31:2], 2'b0};
                     trap_done = 1'b1;
                     next_trap_handle_state = IDLE;
                 end

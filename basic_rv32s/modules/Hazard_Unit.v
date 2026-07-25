@@ -8,7 +8,7 @@ module HazardUnit (
     input wire trap_done,
     input wire csr_ready,
     input wire standby_mode,
-    input wire [2:0] trap_status,
+    input wire [3:0] trap_status,
     input wire misaligned_instruction_flush,
     input wire misaligned_memory_flush,
     input wire pth_done_flush,

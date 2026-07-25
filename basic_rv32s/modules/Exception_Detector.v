@@ -13,6 +13,7 @@ module ExceptionDetector (
     input [2:0] ID_funct3,                // funct3
     input [2:0] EX_funct3,
     input [2:0] MEM_funct3,
+    input [1:0] current_mode,       // current privilege mode
     input [1:0] alu_result,         // LSBs of jump target and data_memory_address
     input [1:0] MEM_alu_result,
     input [11:0] raw_imm,            // raw_imm field to distinguish EBREAK, ECALL and MRET, CSR_Address
@@ -22,16 +23,16 @@ module ExceptionDetector (
     input branch_estimation,
     
     output reg trapped,                // signal indicating if trap has occurred
-    output reg [2:0] trap_status    // current trap status
+    output reg [3:0] trap_status    // current trap status
 );
     reg ID_trapped;
-    reg [2:0] ID_trap_status;
+    reg [3:0] ID_trap_status;
     reg EX_trapped;
-    reg [2:0] EX_trap_status;
+    reg [3:0] EX_trap_status;
     reg MEM_trapped;
-    reg [2:0] MEM_trap_status;
+    reg [3:0] MEM_trap_status;
     reg trapped_combinatorial;
-    reg [2:0] trap_status_combinatorial;
+    reg [3:0] trap_status_combinatorial;
 
     /* For Illegal Instruction Exception
     wire csr_write;
@@ -61,6 +62,9 @@ module ExceptionDetector (
                         ID_trapped = 1'b1;
                     if (raw_imm == 12'b0011_0000_0010) begin
                         ID_trap_status = `TRAP_MRET;
+                    end
+                    else if (raw_imm == 12'b0001_0000_0010) begin
+                        ID_trap_status = `TRAP_SRET;
                     end
                     else if (raw_imm[0]) begin
                         ID_trap_status = `TRAP_EBREAK;
@@ -104,6 +108,9 @@ module ExceptionDetector (
                         EX_trapped = 1'b1;
                     if (EX_raw_imm == 12'b0011_0000_0010) begin
                         EX_trap_status = `TRAP_MRET;
+                    end
+                    else if (EX_raw_imm == 12'b0001_0000_0010) begin
+                        EX_trap_status = `TRAP_SRET;
                     end
                     else if (EX_raw_imm[0]) begin
                         EX_trap_status = `TRAP_EBREAK;
