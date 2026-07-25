@@ -15,7 +15,15 @@ module CSRFile #(
     output reg [XLEN-1:0] csr_read_out,   // data from CSR Unit
     output reg csr_ready,                 // signal to stall the process while accessing the CSR until it outputs the desired value.
     output reg [1:0] current_mode,        // 3 for M-Mode, 1 for S-Mode, 0 for U-Mode
-    output wire [XLEN-1:0] medeleg_out    // delegation info
+    output wire [XLEN-1:0] medeleg_out,   // delegation info
+    output wire [XLEN-1:0] satp_out,      // SATP info for MMU
+    output wire [XLEN-1:0] mstatus_out,   // mstatus info for MMU (SUM, MXR)
+    
+    // TLB Backdoor
+    output reg [19:0] tlb_wvpn,
+    output reg [31:0] tlb_wpte,
+    output reg itlb_we,
+    output reg dtlb_we
     );
 
     wire [XLEN-1:0] mvendorid = 32'h52_56_4B_43;    // "RVKC" ; "R"ISC-"V", "K"HWL & "C"hoiCube84.
@@ -25,9 +33,10 @@ module CSRFile #(
     wire [XLEN-1:0] misa      = 32'h40000100;    // MXL = 32; misa[31:30] = 01. RV32"I"; misa[8] = 1.
 
     // mstatus fields
-    reg MIE, MPIE, SIE, SPIE, SPP;
+    reg MIE, MPIE, SIE, SPIE, SPP, SUM, MXR;
     reg [1:0] MPP;
-    wire [XLEN-1:0] mstatus = {19'b0, MPP, 2'b0, SPP, 2'b0, SPIE, 1'b0, MPIE, 1'b0, SIE, 1'b0, MIE, 3'b0};
+    wire [XLEN-1:0] mstatus = {12'b0, MXR, SUM, 1'b0, 2'b0, 2'b0, MPP, 2'b0, SPP, MPIE, 1'b0, SPIE, 1'b0, MIE, 1'b0, SIE, 1'b0};
+    assign mstatus_out = mstatus;
     // sstatus is a restricted view of mstatus
     wire [XLEN-1:0] sstatus = {23'b0, SPP, 2'b0, SPIE, 3'b0, SIE, 1'b0};
 
@@ -48,6 +57,7 @@ module CSRFile #(
     reg [XLEN-1:0] stval;
     reg [XLEN-1:0] sscratch;
     reg [XLEN-1:0] satp;
+    assign satp_out = satp;
 
     reg [63:0] mcycle;
     reg [63:0] minstret;
@@ -153,8 +163,13 @@ module CSRFile #(
         sscratch <= {XLEN{1'b0}};
         satp    <= {XLEN{1'b0}};
         
-        MIE <= 1'b0; MPIE <= 1'b0; SIE <= 1'b0; SPIE <= 1'b0; SPP <= 1'b0; MPP <= 2'b11;
+        MIE <= 1'b0; MPIE <= 1'b0; SIE <= 1'b0; SPIE <= 1'b0; SPP <= 1'b0; MPP <= 2'b11; SUM <= 1'b0; MXR <= 1'b0;
         current_mode <= 2'b11; // Start in M-Mode
+        
+        tlb_wvpn <= 20'b0;
+        tlb_wpte <= 32'b0;
+        itlb_we <= 1'b0;
+        dtlb_we <= 1'b0;
 
         mcycle  <= DEFAULT_mcycle;
         minstret <= DEFAULT_minstret;
@@ -167,6 +182,10 @@ module CSRFile #(
         if (instruction_retired) begin
           minstret <= minstret + 1;
         end
+
+        // Defaults for single-cycle WE signals
+        itlb_we <= 1'b0;
+        dtlb_we <= 1'b0;
 
         if (csr_access && !csr_processing) begin
           csr_processing <= 1'b1;
@@ -188,6 +207,8 @@ module CSRFile #(
               SIE <= csr_write_data[1];
               SPIE <= csr_write_data[5];
               SPP <= csr_write_data[8];
+              SUM <= csr_write_data[18];
+              MXR <= csr_write_data[19];
           end
           12'h302: medeleg <= csr_write_data;
           12'h303: mideleg <= csr_write_data;
@@ -221,6 +242,16 @@ module CSRFile #(
               SPP <= 1'b0;                      // SPP defaults to U-mode
               SIE <= SPIE;                      // SIE = SPIE
               SPIE <= 1'b1;                     // SPIE = 1
+          end
+          
+          12'h803: tlb_wvpn <= csr_write_data[19:0];
+          12'h804: begin
+              tlb_wpte <= csr_write_data;
+              itlb_we <= 1'b1;
+          end
+          12'h805: begin
+              tlb_wpte <= csr_write_data;
+              dtlb_we <= 1'b1;
           end
           
           default: ;

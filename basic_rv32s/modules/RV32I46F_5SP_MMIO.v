@@ -31,6 +31,7 @@
 `include "modules/Branch_Predictor.v"
 
 `include "modules/MMIO_Interface.v"
+`include "modules/MMU.v"
 
 module RV32I46F5SPMMIO #(
     parameter XLEN = 32
@@ -212,6 +213,19 @@ module RV32I46F5SPMMIO #(
     wire [XLEN-1:0] csr_trap_write_data;
     wire pth_done_flush;
     
+    wire [XLEN-1:0] satp_out;
+    wire [XLEN-1:0] mstatus_out;
+    
+    wire [19:0] tlb_wvpn;
+    wire [31:0] tlb_wpte;
+    wire itlb_we, dtlb_we;
+    
+    // MMU Signals
+    wire [XLEN-1:0] if_physical_address;
+    wire if_page_fault;
+    wire [XLEN-1:0] mem_physical_address;
+    wire mem_load_page_fault;
+    wire mem_store_page_fault;
     // IF_ID_Register
     wire [XLEN-1:0] ID_pc;
     wire [XLEN-1:0] ID_pc_plus_4;
@@ -440,7 +454,40 @@ module RV32I46F5SPMMIO #(
         .csr_read_out(csr_read_out),
         .csr_ready(csr_ready),
         .current_mode(current_mode),
-        .medeleg_out(medeleg)
+        .medeleg_out(medeleg),
+        .satp_out(satp_out),
+        .mstatus_out(mstatus_out),
+        
+        .tlb_wvpn(tlb_wvpn),
+        .tlb_wpte(tlb_wpte),
+        .itlb_we(itlb_we),
+        .dtlb_we(dtlb_we)
+    );
+
+    MMU #(.XLEN(XLEN)) mmu_inst (
+        .clk(clk),
+        .reset(reset),
+        
+        .satp(satp_out),
+        .mstatus(mstatus_out),
+        .current_mode(current_mode),
+        
+        .tlb_wvpn(tlb_wvpn),
+        .tlb_wpte(tlb_wpte),
+        .itlb_we(itlb_we),
+        .dtlb_we(dtlb_we),
+
+        .if_virtual_address(next_pc),
+        .if_request(if_valid),
+        .if_physical_address(if_physical_address),
+        .if_page_fault(if_page_fault),
+
+        .mem_virtual_address(MEM_alu_result),
+        .mem_request_read(dcache_mem_rd),
+        .mem_request_write(MEM_memory_write),
+        .mem_physical_address(mem_physical_address),
+        .mem_load_page_fault(mem_load_page_fault),
+        .mem_store_page_fault(mem_store_page_fault)
     );
 
     // =====================================================================
@@ -450,9 +497,13 @@ module RV32I46F5SPMMIO #(
     // 如果是正常的 RAM 访存请求（即非 MMIO 命中），则送入 DCache
     wire dcache_mem_rd = MEM_memory_read && !mmio_uart_status_hit;
     wire [3:0] dcache_mem_wr = (MEM_memory_write && !mmio_uart_status_hit) ? write_mask : 4'b0000;
-    
-    // 仅当是访问外设时为 0（目前所有走 AXI 的请求默认都是 RAM，故 cacheable 设为 1）
-    wire dcache_mem_cacheable = 1'b1; 
+
+    // 根据物理地址判断是否 cacheable
+    // MMIO 区域 (0x1000_0000 - 0x1FFF_FFFF) 不可缓存
+    // RAM 区域 (0x0000_0000 - 0x0FFF_FFFF) 可缓存
+    wire is_mmio_region = (mem_physical_address >= 32'h10000000) &&
+                          (mem_physical_address < 32'h20000000);
+    wire dcache_mem_cacheable = !is_mmio_region; 
     
     // Pipeline 需要的 mem_valid：用于告诉 HazardUnit 目前是否处于访存状态
     assign mem_valid = (MEM_memory_write || MEM_memory_read);
@@ -472,7 +523,7 @@ module RV32I46F5SPMMIO #(
         .rst_i(reset),
         
         // --- CPU 侧接口 ---
-        .mem_addr_i(MEM_alu_result),
+        .mem_addr_i(mem_physical_address),
         .mem_data_wr_i(data_memory_write_data),
         .mem_rd_i(dcache_mem_rd),
         .mem_wr_i(dcache_mem_wr),
@@ -663,7 +714,7 @@ module RV32I46F5SPMMIO #(
         .req_rd_i(if_valid),
         .req_flush_i(1'b0),
         .req_invalidate_i(1'b0),
-        .req_pc_i(next_pc), // 使用 next_pc 实现零延迟预取
+        .req_pc_i(if_physical_address), // 使用 next_pc 经过 MMU 映射后的地址
         .req_accept_o(), // 暂不使用，CPU 会一直保持 valid 直到 ready
         .req_valid_o(if_ready),
         .req_error_o(), // 暂不处理取指错误异常
@@ -708,7 +759,7 @@ module RV32I46F5SPMMIO #(
         .clk(clk),
         .reset(reset),
         .data_memory_write_data(data_memory_write_data),
-        .data_memory_address(MEM_alu_result),
+        .data_memory_address(mem_physical_address),
         .data_memory_write_enable(MEM_memory_write),
         .UART_busy(UART_busy),
 
