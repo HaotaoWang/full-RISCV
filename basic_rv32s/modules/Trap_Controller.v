@@ -13,6 +13,7 @@ module TrapController #(
     input wire [XLEN-1:0] csr_read_data,
     input wire [1:0] current_mode,     // 3 for M-Mode, 1 for S-Mode, 0 for U-Mode
     input wire [XLEN-1:0] medeleg,     // exception delegation register
+    input wire [XLEN-1:0] mideleg,     // interrupt delegation register
 
     output reg [XLEN-1:0] trap_target,      // trap handler base address output
     output reg ic_clean,         // instruction cache reset signal for zifencei
@@ -24,24 +25,29 @@ module TrapController #(
     output reg misaligned_instruction_flush,        // indicates whether the MISALIGNED INSTRUCTION pth is over and EX_MEM_Register should be flushed or not.
     output reg misaligned_memory_flush,
     output reg pth_done_flush,
+    output reg trap_jump,
     output reg standby_mode
 );
 
 // Exception Cause Code Mapping
-reg [4:0] exception_cause;
+reg [31:0] exception_cause;
 always @(*) begin
-    if (trap_status == `TRAP_EBREAK) exception_cause = 5'd3;
+    if (trap_status == `TRAP_EBREAK) exception_cause = 32'd3;
     else if (trap_status == `TRAP_ECALL) begin
-        if (current_mode == 2'b11) exception_cause = 5'd11;
-        else if (current_mode == 2'b01) exception_cause = 5'd9;
-        else exception_cause = 5'd8;
+        if (current_mode == 2'b11) exception_cause = 32'd11;
+        else if (current_mode == 2'b01) exception_cause = 32'd9;
+        else exception_cause = 32'd8;
     end
-    else if (trap_status == `TRAP_MISALIGNED_LOAD) exception_cause = 5'd4;
-    else if (trap_status == `TRAP_MISALIGNED_STORE) exception_cause = 5'd6;
-    else exception_cause = 5'd0; // TRAP_MISALIGNED_INSTRUCTION
+    else if (trap_status == `TRAP_MISALIGNED_LOAD) exception_cause = 32'd4;
+    else if (trap_status == `TRAP_MISALIGNED_STORE) exception_cause = 32'd6;
+    else if (trap_status == `TRAP_TIMER_INTERRUPT) exception_cause = 32'h8000_0007;
+    else if (trap_status == `TRAP_EXTERNAL_INTERRUPT) exception_cause = 32'h8000_000B;
+    else exception_cause = 32'd0; // TRAP_MISALIGNED_INSTRUCTION
 end
 
-wire delegated_to_s = (current_mode <= 2'b01) && medeleg[exception_cause];
+wire is_interrupt = exception_cause[31];
+wire [4:0] cause_code = exception_cause[4:0];
+wire delegated_to_s = (current_mode <= 2'b01) && (is_interrupt ? mideleg[cause_code] : medeleg[cause_code]);
 
 // FSM States
 localparam  IDLE          = 4'b0000,
@@ -111,6 +117,7 @@ always @(*) begin
     misaligned_instruction_flush = 1'b0;
     misaligned_memory_flush = 1'b0;
     pth_done_flush       = 1'b0;
+    trap_jump            = 1'b0;
     standby_mode = 1'b0;
     // default next state
     next_trap_handle_state = IDLE;
@@ -187,7 +194,7 @@ always @(*) begin
                     // write cause code value
                     csr_write_enable = 1'b1;
                     csr_trap_address = delegated_to_s ? 12'h142 : 12'h342; // scause or mcause
-                    csr_trap_write_data = {27'b0, exception_cause};
+                    csr_trap_write_data = exception_cause;
                     trap_done = 1'b0;
                     next_trap_handle_state = UPDATE_MODE;
                 end
@@ -227,6 +234,7 @@ always @(*) begin
                         misaligned_memory_flush = 1'b1;
                     end
                     trap_done = 1'b1;
+                    trap_jump = 1'b1;
                     pth_done_flush = 1'b1;
                     next_trap_handle_state = GOTO_TVEC;
                 end
@@ -241,6 +249,7 @@ always @(*) begin
                         misaligned_memory_flush = 1'b1;
                     end
                     trap_done = 1'b1;
+                    trap_jump = 1'b1;
                     pth_done_flush = 1'b1;
                     next_trap_handle_state = IDLE;
                 end
@@ -265,6 +274,8 @@ always @(*) begin
                     csr_trap_address = 12'h341; // mepc
                     trap_target = {csr_read_data[31:2], 2'b0};
                     trap_done = 1'b1;
+                    trap_jump = 1'b1;
+                    pth_done_flush = 1'b1;
                     next_trap_handle_state = IDLE;
                 end
 
@@ -287,6 +298,8 @@ always @(*) begin
                     csr_trap_address = 12'h141; // sepc
                     trap_target = {csr_read_data[31:2], 2'b0};
                     trap_done = 1'b1;
+                    trap_jump = 1'b1;
+                    pth_done_flush = 1'b1;
                     next_trap_handle_state = IDLE;
                 end
 

@@ -11,14 +11,23 @@ module CSRFile #(
     input [11:0] csr_write_address,       // address to write
     input [XLEN-1:0] csr_write_data,      // data to write
     input instruction_retired,
+    
+    // Interrupt Inputs
+    input timer_irq,
+    input external_irq,
 
     output reg [XLEN-1:0] csr_read_out,   // data from CSR Unit
     output reg csr_ready,                 // signal to stall the process while accessing the CSR until it outputs the desired value.
     output reg [1:0] current_mode,        // 3 for M-Mode, 1 for S-Mode, 0 for U-Mode
+    
     output wire [XLEN-1:0] medeleg_out,   // delegation info
+    output wire [XLEN-1:0] mideleg_out,   // interrupt delegation info
     output wire [XLEN-1:0] satp_out,      // SATP info for MMU
     output wire [XLEN-1:0] mstatus_out,   // mstatus info for MMU (SUM, MXR)
     
+    output wire timer_interrupt_pending,
+    output wire external_interrupt_pending,
+
     // TLB Backdoor
     output reg [19:0] tlb_wvpn,
     output reg [31:0] tlb_wpte,
@@ -48,7 +57,17 @@ module CSRFile #(
     reg [XLEN-1:0] mscratch;
     reg [XLEN-1:0] medeleg;
     reg [XLEN-1:0] mideleg;
+    
+    reg [XLEN-1:0] mie;
+    reg [XLEN-1:0] mip_reg; // software writable parts of mip
+
+    wire [XLEN-1:0] mip = {mip_reg[31:12], external_irq, mip_reg[10:8], timer_irq, mip_reg[6:0]}; // MEIP = 11, MTIP = 7
+    
     assign medeleg_out = medeleg;
+    assign mideleg_out = mideleg;
+    
+    assign timer_interrupt_pending = MIE & mie[7] & timer_irq;
+    assign external_interrupt_pending = MIE & mie[11] & external_irq;
 
     // S-Mode Registers
     reg [XLEN-1:0] stvec;
@@ -81,11 +100,13 @@ module CSRFile #(
                                (csr_read_address == 12'h301) || // misa
                                (csr_read_address == 12'h302) || // medeleg
                                (csr_read_address == 12'h303) || // mideleg
+                               (csr_read_address == 12'h304) || // mie
                                (csr_read_address == 12'h305) || // mtvec
                                (csr_read_address == 12'h340) || // mscratch
                                (csr_read_address == 12'h341) || // mepc
                                (csr_read_address == 12'h342) || // mcause
                                (csr_read_address == 12'h343) || // mtval
+                               (csr_read_address == 12'h344) || // mip
                                (csr_read_address == 12'h100) || // sstatus
                                (csr_read_address == 12'h105) || // stvec
                                (csr_read_address == 12'h140) || // sscratch
@@ -117,11 +138,13 @@ module CSRFile #(
         12'h301: csr_read_data = misa;
         12'h302: csr_read_data = medeleg;
         12'h303: csr_read_data = mideleg;
+        12'h304: csr_read_data = mie;
         12'h305: csr_read_data = mtvec;
         12'h340: csr_read_data = mscratch;
         12'h341: csr_read_data = mepc;
         12'h342: csr_read_data = mcause;
         12'h343: csr_read_data = mtval;
+        12'h344: csr_read_data = mip;
         12'h100: csr_read_data = sstatus;
         12'h105: csr_read_data = stvec;
         12'h140: csr_read_data = sscratch;
@@ -155,6 +178,8 @@ module CSRFile #(
         mscratch <= {XLEN{1'b0}};
         medeleg <= {XLEN{1'b0}};
         mideleg <= {XLEN{1'b0}};
+        mie     <= {XLEN{1'b0}};
+        mip_reg <= {XLEN{1'b0}};
         
         stvec   <= {XLEN{1'b0}};
         sepc    <= {XLEN{1'b0}};
@@ -212,11 +237,13 @@ module CSRFile #(
           end
           12'h302: medeleg <= csr_write_data;
           12'h303: mideleg <= csr_write_data;
+          12'h304: mie <= csr_write_data;
           12'h305: mtvec  <= csr_write_data;
           12'h340: mscratch <= csr_write_data;
           12'h341: mepc   <= csr_write_data;
           12'h342: mcause <= csr_write_data;
           12'h343: mtval  <= csr_write_data;
+          12'h344: mip_reg <= csr_write_data;
           12'h100: begin // sstatus
               SIE <= csr_write_data[1];
               SPIE <= csr_write_data[5];
@@ -230,7 +257,18 @@ module CSRFile #(
           12'h180: satp   <= csr_write_data;
           
           // Custom interface for Trap Controller to change current_mode
-          12'h800: current_mode <= csr_write_data[1:0];
+          12'h800: begin
+              if (csr_write_data[1:0] == 2'b11) begin // Trapping to M-Mode
+                  MPP <= current_mode;
+                  MPIE <= MIE;
+                  MIE <= 1'b0;
+              end else if (csr_write_data[1:0] == 2'b01) begin // Trapping to S-Mode
+                  SPP <= current_mode[0];
+                  SPIE <= SIE;
+                  SIE <= 1'b0;
+              end
+              current_mode <= csr_write_data[1:0];
+          end
           12'h801: begin // Custom interface for MRET pop
               current_mode <= MPP;              // Pop MPP
               MPP <= 2'b00;                     // MPP defaults to U-mode

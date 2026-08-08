@@ -44,6 +44,8 @@ module RV32_SoC_AXI_Top #(
     // =====================================================================
     //  内部连线声明
     // =====================================================================
+    
+    wire timer_irq;
 
     // --- CPU IF (取指) AXI Master 信号 (Full AXI4) ---
     wire        cpu_if_awvalid, cpu_if_awready;
@@ -155,6 +157,32 @@ module RV32_SoC_AXI_Top #(
     wire [ 1:0] ram_rresp;
     wire        ram_rlast;
 
+    // --- Interconnect -> CLINT AXI 信号 ---
+    wire        clint_awvalid, clint_awready;
+    wire [31:0] clint_awaddr;
+    wire [ 3:0] clint_awid;
+    wire [ 7:0] clint_awlen;
+    wire [ 2:0] clint_awsize;
+    wire [ 1:0] clint_awburst;
+    wire        clint_wvalid, clint_wready;
+    wire [31:0] clint_wdata;
+    wire [ 3:0] clint_wstrb;
+    wire        clint_wlast;
+    wire        clint_bvalid, clint_bready;
+    wire [ 3:0] clint_bid;
+    wire [ 1:0] clint_bresp;
+    wire        clint_arvalid, clint_arready;
+    wire [31:0] clint_araddr;
+    wire [ 3:0] clint_arid;
+    wire [ 7:0] clint_arlen;
+    wire [ 2:0] clint_arsize;
+    wire [ 1:0] clint_arburst;
+    wire        clint_rvalid, clint_rready;
+    wire [31:0] clint_rdata;
+    wire [ 3:0] clint_rid;
+    wire [ 1:0] clint_rresp;
+    wire        clint_rlast;
+
     // =====================================================================
     //  模块实例化 1: CPU 核心
     // =====================================================================
@@ -168,6 +196,9 @@ module RV32_SoC_AXI_Top #(
         .mmio_uart_tx_data(mmio_uart_tx_data),
         .mmio_uart_tx_start(mmio_uart_tx_start),
         .mmio_led(mmio_led),
+
+        .timer_irq(timer_irq),
+        .external_irq(1'b0), // 未使用外部中断
 
         // IF AXI Master
         .m_axi_if_awvalid(cpu_if_awvalid),
@@ -236,11 +267,12 @@ module RV32_SoC_AXI_Top #(
     
     axi_interconnect #(
         .S_COUNT(2),
-        .M_COUNT(1),
+        .M_COUNT(2),
         .DATA_WIDTH(32),
         .ADDR_WIDTH(32),
         .ID_WIDTH(4),
-        .M_ADDR_WIDTH({1{32'd16}})
+        .M_BASE_ADDR({32'h02000000, 32'h00000000}),
+        .M_ADDR_WIDTH({32'd24, 32'd16})
     ) bus_interconnect (
         .clk(clk),
         .rst(rst),
@@ -288,44 +320,44 @@ module RV32_SoC_AXI_Top #(
         .s_axi_rvalid   ({cpu_mem_rvalid,  cpu_if_rvalid}),
         .s_axi_rready   ({cpu_mem_rready,  cpu_if_rready}),
 
-        // Master 端口
-        .m_axi_awid     (ram_awid),
-        .m_axi_awaddr   (ram_awaddr),
-        .m_axi_awlen    (ram_awlen),
-        .m_axi_awsize   (ram_awsize),
-        .m_axi_awburst  (ram_awburst),
-        .m_axi_awlock   (ram_awlock),
-        .m_axi_awcache  (ram_awcache),
-        .m_axi_awprot   (ram_awprot),
-        .m_axi_awqos    (ram_awqos),
-        .m_axi_awvalid  (ram_awvalid),
-        .m_axi_awready  (ram_awready),
-        .m_axi_wdata    (ram_wdata),
-        .m_axi_wstrb    (ram_wstrb),
-        .m_axi_wlast    (ram_wlast),
-        .m_axi_wvalid   (ram_wvalid),
-        .m_axi_wready   (ram_wready),
-        .m_axi_bid      (ram_bid),
-        .m_axi_bresp    (ram_bresp),
-        .m_axi_bvalid   (ram_bvalid),
-        .m_axi_bready   (ram_bready),
-        .m_axi_arid     (ram_arid),
-        .m_axi_araddr   (ram_araddr),
-        .m_axi_arlen    (ram_arlen),
-        .m_axi_arsize   (ram_arsize),
-        .m_axi_arburst  (ram_arburst),
-        .m_axi_arlock   (ram_arlock),
-        .m_axi_arcache  (ram_arcache),
-        .m_axi_arprot   (ram_arprot),
-        .m_axi_arqos    (ram_arqos),
-        .m_axi_arvalid  (ram_arvalid),
-        .m_axi_arready  (ram_arready),
-        .m_axi_rid      (ram_rid),
-        .m_axi_rdata    (ram_rdata),
-        .m_axi_rresp    (ram_rresp),
-        .m_axi_rlast    (ram_rlast),
-        .m_axi_rvalid   (ram_rvalid),
-        .m_axi_rready   (ram_rready)
+        // Master 端口 (M1: CLINT, M0: RAM)
+        .m_axi_awid     ({clint_awid,    ram_awid}),
+        .m_axi_awaddr   ({clint_awaddr,  ram_awaddr}),
+        .m_axi_awlen    ({clint_awlen,   ram_awlen}),
+        .m_axi_awsize   ({clint_awsize,  ram_awsize}),
+        .m_axi_awburst  ({clint_awburst, ram_awburst}),
+        .m_axi_awlock   ({               ram_awlock}),
+        .m_axi_awcache  ({               ram_awcache}),
+        .m_axi_awprot   ({               ram_awprot}),
+        .m_axi_awqos    ({               ram_awqos}),
+        .m_axi_awvalid  ({clint_awvalid, ram_awvalid}),
+        .m_axi_awready  ({clint_awready, ram_awready}),
+        .m_axi_wdata    ({clint_wdata,   ram_wdata}),
+        .m_axi_wstrb    ({clint_wstrb,   ram_wstrb}),
+        .m_axi_wlast    ({clint_wlast,   ram_wlast}),
+        .m_axi_wvalid   ({clint_wvalid,  ram_wvalid}),
+        .m_axi_wready   ({clint_wready,  ram_wready}),
+        .m_axi_bid      ({clint_bid,     ram_bid}),
+        .m_axi_bresp    ({clint_bresp,   ram_bresp}),
+        .m_axi_bvalid   ({clint_bvalid,  ram_bvalid}),
+        .m_axi_bready   ({clint_bready,  ram_bready}),
+        .m_axi_arid     ({clint_arid,    ram_arid}),
+        .m_axi_araddr   ({clint_araddr,  ram_araddr}),
+        .m_axi_arlen    ({clint_arlen,   ram_arlen}),
+        .m_axi_arsize   ({clint_arsize,  ram_arsize}),
+        .m_axi_arburst  ({clint_arburst, ram_arburst}),
+        .m_axi_arlock   ({               ram_arlock}),
+        .m_axi_arcache  ({               ram_arcache}),
+        .m_axi_arprot   ({               ram_arprot}),
+        .m_axi_arqos    ({               ram_arqos}),
+        .m_axi_arvalid  ({clint_arvalid, ram_arvalid}),
+        .m_axi_arready  ({clint_arready, ram_arready}),
+        .m_axi_rid      ({clint_rid,     ram_rid}),
+        .m_axi_rdata    ({clint_rdata,   ram_rdata}),
+        .m_axi_rresp    ({clint_rresp,   ram_rresp}),
+        .m_axi_rlast    ({clint_rlast,   ram_rlast}),
+        .m_axi_rvalid   ({clint_rvalid,  ram_rvalid}),
+        .m_axi_rready   ({clint_rready,  ram_rready})
     );
 
     // =====================================================================
@@ -377,6 +409,51 @@ module RV32_SoC_AXI_Top #(
         .s_axi_rlast    (ram_rlast),
         .s_axi_rvalid   (ram_rvalid),
         .s_axi_rready   (ram_rready)
+    );
+
+    // =====================================================================
+    //  模块实例化 4: CLINT (核心局部中断器)
+    // =====================================================================
+
+    axi_clint #(
+        .DATA_WIDTH(32),
+        .ADDR_WIDTH(32),
+        .ID_WIDTH(4)
+    ) clint_timer (
+        .clk(clk),
+        .rst(rst),
+        
+        .s_axi_awid     (clint_awid),
+        .s_axi_awaddr   (clint_awaddr),
+        .s_axi_awlen    (clint_awlen),
+        .s_axi_awsize   (clint_awsize),
+        .s_axi_awburst  (clint_awburst),
+        .s_axi_awvalid  (clint_awvalid),
+        .s_axi_awready  (clint_awready),
+        .s_axi_wdata    (clint_wdata),
+        .s_axi_wstrb    (clint_wstrb),
+        .s_axi_wlast    (clint_wlast),
+        .s_axi_wvalid   (clint_wvalid),
+        .s_axi_wready   (clint_wready),
+        .s_axi_bid      (clint_bid),
+        .s_axi_bresp    (clint_bresp),
+        .s_axi_bvalid   (clint_bvalid),
+        .s_axi_bready   (clint_bready),
+        .s_axi_arid     (clint_arid),
+        .s_axi_araddr   (clint_araddr),
+        .s_axi_arlen    (clint_arlen),
+        .s_axi_arsize   (clint_arsize),
+        .s_axi_arburst  (clint_arburst),
+        .s_axi_arvalid  (clint_arvalid),
+        .s_axi_arready  (clint_arready),
+        .s_axi_rid      (clint_rid),
+        .s_axi_rdata    (clint_rdata),
+        .s_axi_rresp    (clint_rresp),
+        .s_axi_rlast    (clint_rlast),
+        .s_axi_rvalid   (clint_rvalid),
+        .s_axi_rready   (clint_rready),
+        
+        .timer_irq      (timer_irq)
     );
 
 endmodule

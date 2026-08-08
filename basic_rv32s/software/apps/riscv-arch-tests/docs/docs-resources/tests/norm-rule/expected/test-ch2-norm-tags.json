@@ -1,0 +1,81 @@
+{
+  "tags": {
+    "norm:admonition:single-paragraph-note": "Single paragraph note\nthat spans lines.",
+    "norm:admonition:no-anchors-in-notes:entire-note": "Paragraph A\n\nParagraph B\n\nParagraph C",
+    "norm:admonition:anchors-in-notes:note1": "Paragraph 0",
+    "norm:admonition:anchors-in-notes:note3": "Paragraph 2",
+    "norm:admonition:anchors-in-notes:entire-note": "Paragraph 0\n\nParagraph 1\n\nParagraph 2",
+    "norm:admonition:only-anchors-in-notes:note1": "Paragraph X",
+    "norm:admonition:only-anchors-in-notes:note3": "Paragraph Z",
+    "norm:ROSE_COLORS": "You can use red or yellow roses. The tags backend removes some adoc formating so I don't see bold text but I can see ^superscript^ as long as I use the inline anchor and not the paragraph anchor.",
+    "norm:XLEN": "We use the term XLEN to refer to the width of an integer register in bits (either 32 or 64). No superscript in paragraph anchors for some reason.",
+    "norm:ASIDLEN": "The number of ASID bits is UNSPECIFIED and may be zero. The number of implemented ASID bits, termed ASIDLEN, may be determined by writing one to every bit position in the ASID field, then reading back the value in satp to see which bit positions in the ASID field hold a one.",
+    "norm:foobar-ch2": "This is the Ch2 part of the foobar normative rule.",
+    "norm:mock-inst-x": "Here&#8217;s a normative rule for mock instruction \"X\".",
+    "norm:base-rv32i": "Here&#8217;s a normative rule for the RV32I base ISA.",
+    "norm:base-rv32i-rv64i": "Here&#8217;s a normative rule for the RV32I or RV64I base ISA.",
+    "norm:mock-csr-x": "Here&#8217;s a normative rule for mock CSR \"X\".",
+    "norm:mock-csr-field-y": "Here&#8217;s a normative rule for mock CSR field \"Y\".",
+    "norm:mock-ext-dep-A-on-B": "Here&#8217;s a normative rule for mock extension dependency of extension A on extension B.",
+    "norm:foo_abc_warl_enum": "An implementation may support any or all of the following values for the 4-bit foo.ABC field: When foo.GHI is 0, legal values are 0, 4, 15. When foo.GHI is non-zero, legal values are 1, 2, 3.",
+    "norm:foo_ghi_warl_var_width": "The foo.GHI CSR field width ranges from 4 to 8 bits as specified by the UINT_4TO8 parameter value.",
+    "norm:zort_xyz_wlrl_ro_mask": "An implementation may treat each bit of the zort.XYZ\nCSR as read-only or read-write",
+    "norm:qux_qqq_wlrl_other": "The qux.QQQ CSR field has implementation-defined behavior\nthat doesn't match any of the defined WARL/WLRL types."
+  },
+  "sections": {
+    "title": "",
+    "id": "",
+    "children": [
+      {
+        "title": "Chapter 2",
+        "id": "_chapter_2",
+        "children": [
+          {
+            "title": "Chapter 2.1 - Tagging Admonitions",
+            "id": "_chapter_2_1_tagging_admonitions",
+            "children": [],
+            "tags": [
+              "norm:admonition:single-paragraph-note",
+              "norm:admonition:no-anchors-in-notes:entire-note",
+              "norm:admonition:anchors-in-notes:note1",
+              "norm:admonition:anchors-in-notes:note3",
+              "norm:admonition:anchors-in-notes:entire-note",
+              "norm:admonition:only-anchors-in-notes:note1",
+              "norm:admonition:only-anchors-in-notes:note3"
+            ]
+          },
+          {
+            "title": "Chapter 2.2 - Implementation-Defined Behaviors",
+            "id": "_chapter_2_2_implementation_defined_behaviors",
+            "children": [],
+            "tags": [
+              "norm:ROSE_COLORS",
+              "norm:XLEN",
+              "norm:ASIDLEN",
+              "norm:foobar-ch2",
+              "norm:mock-inst-x",
+              "norm:base-rv32i",
+              "norm:base-rv32i-rv64i",
+              "norm:mock-csr-x",
+              "norm:mock-csr-field-y",
+              "norm:mock-ext-dep-A-on-B"
+            ]
+          },
+          {
+            "title": "Chapter 2.3 - CSR Field Types",
+            "id": "_chapter_2_3_csr_field_types",
+            "children": [],
+            "tags": [
+              "norm:foo_abc_warl_enum",
+              "norm:foo_ghi_warl_var_width",
+              "norm:zort_xyz_wlrl_ro_mask",
+              "norm:qux_qqq_wlrl_other"
+            ]
+          }
+        ],
+        "tags": []
+      }
+    ],
+    "tags": []
+  }
+}

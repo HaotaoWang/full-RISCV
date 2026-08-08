@@ -126,7 +126,7 @@ always @(posedge clk or posedge reset) begin
             EX_branch_estimation <= ID_branch_estimation;
             EX_instruction <= ID_instruction;
 
-            EX_jump <= ID_jump;
+            EX_jump <= 1'b0;  // ✅ ID阶段的跳转已经处理，不需要传递到EX阶段
             EX_memory_read <= ID_memory_read;
             EX_memory_write <= ID_memory_write;
             EX_register_file_write_data_select <= ID_register_file_write_data_select;

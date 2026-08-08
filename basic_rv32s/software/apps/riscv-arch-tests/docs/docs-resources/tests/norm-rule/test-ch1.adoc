@@ -1,0 +1,333 @@
+// This file contains test AsciiDoc to test the custom AsciiDoctor "tags" backend and the "create_normative_rules" Ruby
+// script that consumes the tags to create a list of normative rules.
+
+== Chapter 1
+
+=== Chapter 1.1 - Inline Tagging
+
+// PASSES
+Before inline [#norm:inline]#inside inline# outside inline.
+
+// SHOULD ALWAYS FAIL - Can't put inline tag at end of line.
+Before bad inline [#norm:bad-inline-1]#
+inside bad inline# outside bad inline.
+
+// SHOULD ALWAYS FAIL - Can't span blocks (paragraphs in this case)
+Before bad inline [#norm:bad-inline-2]#inside bad inline.
+
+Next paragraph# outside.
+
+// SHOULD ALWAYS FAIL - Can't span blocks (list in this case)
+Before bad inline [#norm:bad-inline-3]#inside bad inline:
+
+* Unordered list line 1#
+* Unordered list line 2
+
+// PASSES
+Use inline anchor that [#norm:inline-with-hash]+includes a hash # symbol.+
+
+[[norm:extension-dependency]]
+The F extensions depends on the Zicsr extension.
+
+[[norm:all-bases]]
+Everyone loves RISC-V!
+
+// PASSES
+This normative text [#norm:clarification-without-text]#isn't clear enough.#
+This normative text [#norm:clarification-with-text]#also isn't clear enough.#
+
+// PASSES - Example where 2nd sentence needs 1st sentence for context.
+[#norm:cat-colors]#Cats come in many colors.#
+[#norm:cat-claws]#This kind of animal has claws.#
+
+=== Chapter 1.2 - Paragraph Tagging
+
+// PASSES
+[[norm:paragraph:no-inline-anchors]]
+Paragraph without inline anchors
+
+Next paragraph 1
+
+// PASSES - Paragraph tag includes entire paragraph and inline tag just the inline portion.
+// Get coverage on alternate adoc paragraph tag format.
+[#norm:paragraph:inline-anchors:entire]
+Paragraph with [#norm:paragraph:inline-anchors:inline-anchor]#inline anchor# and something.
+
+Next paragraph 2
+
+// PASSES - Tag omits newline character
+[[norm:paragraph:tag_with_newlines]]
+Here's the first line.
+Here's the second line.
+
+// FAILS - Can't have multiple paragraph tags (only last works)
+[[norm:abc]]
+[[norm:def]]
+This paragraph has two tags but we only ever get a tag for norm:def.
+
+[[norm:abc]]
+[[def]]
+This paragraph has two tags but we'll never see either since the 1st isn't picked up by the tags backend as a tag and the second doesn't start with norm:
+
+[[norm:formulae]]
+This paragraph looks like a formulae to Excel because it has this < sign in it.
+Make sure this gets written as a string, not a formulae in the XLSX or else it will create an error in Excel.
+
+=== Chapter 1.3 - AsciiDoc Formatting
+
+These are present to test conversation of normative text that contains AsciiDoc formatting to
+output formats such as HTML.
+
+Bold and italics are stripped by the tags backend somehow so they aren't present in the tags JSON file.
+Bold [#norm:bold]#*ABC* is a n**et**work - Bold is removed by tags backend so I don't see it# outside.
+Italics [#norm:italics]#Let's have _fun_ to__day__ - Italics is removed by tags backend so I don't see it# outside.
+
+Superscript [#norm:superscript]#both 2^32^ and ^32^ work# outside.
+
+Subscript [#norm:subscript]#both ~log~ and log~2~ work# outside.
+
+Inline underline [.underline]#before tag# [#norm:inline-underline]+ABC [.underline]#inside tag# GHI+ outside.
+
+[[norm:paragraph-underline]]
+Paragraph [.underline]#underlined# outside.
+
+Ampersand [#norm:standalone_ampersand]#ABC & DEF# outside.
+
+Unicode name [#norm:unicode_name]#DEF &ge; GHI# outside.
+
+Unicode decimal value [#norm:unicode_decimal_value]#GHI &#8805; JKL# outside.
+
+Unicode hexadecimal value [#norm:unicode_hexadecimal_value]#JKL &#x2265; MNO# outside.
+
+Unicode character [#norm:unicode_char]#MNO ≥ PQR# outside.
+
+:ge: &#8805;
+
+Macro call [#norm:macro_call]#200 {ge} 100# outside.
+
+Before hyperlink [#norm:hyperlink1]#ABC <<norm:superscript>> DEF# outside.
+
+Before hyperlink [#norm:hyperlink2]#DEF <<norm:superscript,custom text>> GHI# outside.
+
+Before hyperlink [#norm:hyperlink3]#ABC <<non-norm-anchor>> DEF# outside.
+
+Before hyperlink [#norm:hyperlink4]#DEF <<non-norm-anchor,custom text>> GHI# outside.
+
+Before hyperlink [#norm:hyperlink5]#GHI <<norm:superscript>> and <<norm:subscript>> JKL# outside.
+
+Before hyperlink [#norm:hyperlink6]#JKL <<norm:superscript ,hello>> and <<norm:subscript, goodbye>> MNO# outside.
+
+[[non-norm-anchor]]
+Here's some text that isn't normative but the normatively tagged text has an existing link into it.
+
+=== Chapter 1.4 - Table Tagging
+
+// PASSES
+[[norm:table:no-anchors-in-cells:entire-table]]
+[cols="1,1"]
+|===
+|Header 1|Header 2
+
+|Cell in column 1, row 1 |Cell in column 2, row 1
+|Cell in column 1, row 2 |Cell in column 2, row 2
+|===
+
+// PASSES
+[[norm:table:anchors-in-cells:entire-table]]
+|===
+
+// PASSES
+| [#norm:table:anchors-in-cells:entire-table-tagged:cell]#WITH anchor#
+| WITHOUT anchor
+|===
+
+|===
+
+// PASSES - Handles adoc formatted cell
+a| Cell is adoc
+// PASSES
+| [#norm:table:anchors-in-cells:entire-table-not-tagged:cell]#ABC DEF#
+|===
+
+// PASSES
+[[norm:table:many-rows]]
+[cols="1,1"]
+|===
+|Name|Color
+
+|Roses|Red
+|Violets|Blue
+|Name1|Color1
+|Name2|Color2
+|Name3|Color3
+|Name4|Color4
+|Name5|Color5
+|Name6|Color6
+|Name7|Color7
+|Name8|Color8
+|Name9|Color9
+|Name10|Color10
+|Name11|Color11
+|Name12|Color12
+|Name13|Color13
+|Name14|Color14
+|===
+
+// PASSES
+[[norm:table:single-char-cells]]
+|===
+|X1|X2
+
+| A|B
+|C| D
+|===
+
+// Put a hard line break (+) after each table cell to force newline within cell.
+// Seems to be used quite often in ISA manual to create a table without lines between rows
+// and the table contents provided in column order instead of row order.
+// This is really creating a table with just one row but the newlines make it look
+// like multiple rows.
+// FAILS
+[[norm:table:column-first-order]]
+[options="header"]
+|===
+|ColA|ColB
+|0 +
+1
+|Off +
+On
+|===
+
+=== Chapter 1.5 - Tagging Unordered Lists
+
+// PASSES - Tag includes all list items
+[[norm:unordered-list:no-anchors-in-items:entire-list]]
+* Item A
+* Item B
+* Item C
+
+Some text here.
+
+// PASSES - Tag includes all items
+[[norm:unordered-list:anchors-in-items:entire-list]]
+// PASSES
+* [#norm:unordered-list:anchors-in-items:item1]#Item 1#
+* [#norm:unordered-list:anchors-in-items:item2]#Item 2#
+* Item 3
+
+Some text here.
+
+// PASSES - Tag contains all content
+[[norm:unordered-list:multiple-levels]]
+* Zca and not F
+* Zca, Zcf and F (but not D) is specified (RV32 only)
+* Zca, Zcf and Zcd if D is specified (RV32 only)
+** this configuration excludes Zcmp, Zcmt
+* Zca, Zcd if D is specified (RV64 only)
+** this configuration excludes Zcmp, Zcmt
+
+=== Chapter 1.6 - Tagging Ordered Lists
+
+// PASSES - Tag includes all list items
+[[norm:ordered-list:no-anchors-in-items:entire-list]]
+. Item A
+. Item B
+. Item C
+
+// PASSES - Tag contains entire list
+[[norm:ordered-list:anchors-in-items:entire-list]]
+// PASSES
+. [#norm:ordered-list:anchors-in-items:item1]#Item 1#
+. [#norm:ordered-list:anchors-in-items:item2]#Item 2#
+. Item 3
+
+=== Chapter 1.7 - Tagging Description Lists
+
+// PASSES - Tag includes all descriptions and items
+[[norm:description-list:no-anchors-in-items:entire-list]]
+Description-A::
+Item A
+
+Description-B:: Item B
+
+Description-C::
+Item C
+
+// FAILS - Tag only includes text "Description-1"
+[[norm:description-list:anchors-in-items:entire-list]]
+Description-1::
+
+// PASSES - Tag includes list item
+[[norm:description-list:anchors-in-items:item1]]
+Item 1
+
+Description-2:: Item 2
+
+Description-3::
+// PASSES - Tag includes list item
+[[norm:description-list:anchors-in-items:item3]]
+Item 3
+
+== Chapter 2 - Implementation-Defined Behaviors
+
+[[norm:boolean]]
+This is a boolean.
+
+[[norm:bit]]
+This is a bit.
+
+[[norm:byte]]
+This is a byte.
+
+[[norm:hword]]
+This is a half-word (16 bits).
+
+[[norm:word]]
+This is a word (32 bits).
+
+[[norm:dword]]
+This is a double-word (64 bits).
+
+[[norm:boolean-context]]
+Here's some context for the boolean.
+
+[[norm:uint6]]
+This is a 6-bit unsigned integer.
+
+[#norm:uint32]#This is a 32-bit unsigned integer. Should be 0 to &lt; 2^32^-1. Need to use inline anchor to see superscript.#
+
+[[norm:int64]]
+This is a 64-bit signed integer.
+
+[[norm:int2]]
+This is a 2-bit signed integer.
+
+[[norm:uint-1to100]]
+This is an unsigned integer in the range of 1 to 100.
+
+[[norm:uint-4to8]]
+This is an unsigned integer in the range of 4 to 8.
+
+[[norm:list-str]]
+[cols="1,1"]
+|===
+| Name | Description
+
+|ABC | Letters "ABC"
+|DEF | Letters "DEF"
+|GHI | Letters "GHI"
+|===
+
+[[norm:list-int]]
+This is a list with values 1, 2 and 4.
+
+[[norm:foobar-ch1]]
+This is the Ch1 part of the foobar normative rule.
+
+[[norm:array]]
+Can have up to 29 performance counters. Reading an unimplemented performance counter either
+returns a value or raises an illegal instruction exception, depending on the implementation.
+
+=== Chapter 2.1 - WARL
+
+[#norm:satp_asid_warl_asidlen]#The `satp.ASID` CSR field width is specified by the ASIDLEN parameter value.#

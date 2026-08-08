@@ -45,6 +45,10 @@ module RV32I46F5SPMMIO #(
     output wire mmio_uart_tx_start,
     output wire [3:0] mmio_led,
 
+    // Interrupt Inputs
+    input timer_irq,
+    input external_irq,
+
     // --- 新增：指令取指 (IF) Full AXI4 Master 接口 (用于 ICache) ---
     output        m_axi_if_awvalid,
     input         m_axi_if_awready,
@@ -440,6 +444,9 @@ module RV32I46F5SPMMIO #(
 
     wire [1:0] current_mode;
     wire [XLEN-1:0] medeleg;
+    wire [XLEN-1:0] mideleg;
+    wire timer_interrupt_pending;
+    wire external_interrupt_pending;
 
     CSRFile #(.XLEN(XLEN)) csr_file (
         .clk(clk),
@@ -455,8 +462,14 @@ module RV32I46F5SPMMIO #(
         .csr_ready(csr_ready),
         .current_mode(current_mode),
         .medeleg_out(medeleg),
+        .mideleg_out(mideleg),
         .satp_out(satp_out),
         .mstatus_out(mstatus_out),
+        
+        .timer_irq(timer_irq),
+        .external_irq(external_irq),
+        .timer_interrupt_pending(timer_interrupt_pending),
+        .external_interrupt_pending(external_interrupt_pending),
         
         .tlb_wvpn(tlb_wvpn),
         .tlb_wpte(tlb_wpte),
@@ -500,10 +513,11 @@ module RV32I46F5SPMMIO #(
 
     // 根据物理地址判断是否 cacheable
     // MMIO 区域 (0x1000_0000 - 0x1FFF_FFFF) 不可缓存
+    // CLINT 区域 (0x0200_0000 - 0x02FF_FFFF) 不可缓存
     // RAM 区域 (0x0000_0000 - 0x0FFF_FFFF) 可缓存
-    wire is_mmio_region = (mem_physical_address >= 32'h10000000) &&
-                          (mem_physical_address < 32'h20000000);
-    wire dcache_mem_cacheable = !is_mmio_region; 
+    wire is_mmio_region = ((mem_physical_address >= 32'h10000000) && (mem_physical_address < 32'h20000000)) ||
+                          ((mem_physical_address >= 32'h02000000) && (mem_physical_address < 32'h03000000));
+    wire dcache_mem_cacheable = !is_mmio_region;
     
     // Pipeline 需要的 mem_valid：用于告诉 HazardUnit 目前是否处于访存状态
     assign mem_valid = (MEM_memory_write || MEM_memory_read);
@@ -591,6 +605,9 @@ module RV32I46F5SPMMIO #(
         .MEM_alu_result(MEM_alu_result[1:0]),
         .branch_target_lsbs(branch_target[1:0]),
         .branch_estimation(branch_estimation),
+        
+        .timer_interrupt_pending(timer_interrupt_pending),
+        .external_interrupt_pending(external_interrupt_pending),
 
         .trapped(trapped),
         .trap_status(trap_status)
@@ -784,6 +801,8 @@ module RV32I46F5SPMMIO #(
 
     PCController pc_controller (
         .jump(EX_jump),
+        .ID_jump(ID_jump),              // ✅ 连接ID阶段跳转信号
+        .ID_jump_target(ID_jump_target), // ✅ 连接ID阶段跳转目标
         .branch_estimation(branch_estimation),
         .branch_prediction_miss(branch_prediction_miss),
         .trapped(trapped),
@@ -791,8 +810,9 @@ module RV32I46F5SPMMIO #(
         .jump_target(alu_result),
         .branch_target(branch_target),
         .branch_target_actual(branch_target_actual),
-	    .trap_target(trap_target),
+        .trap_target(trap_target),
         .pc_stall(pc_stall),
+        .trap_jump(trap_jump),
 	    .next_pc(next_pc)
     );
 
@@ -819,10 +839,12 @@ module RV32I46F5SPMMIO #(
         .csr_read_data(csr_read_out),
         .current_mode(current_mode),
         .medeleg(medeleg),
+        .mideleg(mideleg),
 
         .debug_mode(debug_mode),
         .trap_target(trap_target),
         .trap_done(trap_done),
+        .trap_jump(trap_jump),
         .misaligned_instruction_flush(misaligned_instruction_flush),
         .misaligned_memory_flush(misaligned_memory_flush),
         .pth_done_flush(pth_done_flush),
@@ -832,10 +854,16 @@ module RV32I46F5SPMMIO #(
         .csr_trap_write_data(csr_trap_write_data)
     );
 
+    reg IF_ID_flush_delay;
+    always @(posedge clk) begin
+        if (reset) IF_ID_flush_delay <= 1'b0;
+        else IF_ID_flush_delay <= IF_ID_flush;
+    end
+
     IF_ID_Register #(.XLEN(XLEN)) if_id_register (
         .clk(clk),
 		.reset(reset),
-        .flush(IF_ID_flush),
+        .flush(IF_ID_flush || IF_ID_flush_delay),
         .IF_ID_stall(IF_ID_stall),
 
         // Signals from IF Phase

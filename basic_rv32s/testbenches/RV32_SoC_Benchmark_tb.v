@@ -34,27 +34,7 @@ module RV32_SoC_Benchmark_tb;
         UART_busy = 0;
         #100;
 
-        soc.main_memory.mem[0] = 32'h06400113; // addi x2, x0, 100
-        soc.main_memory.mem[1] = 32'h00000193; // addi x3, x0, 0
-        soc.main_memory.mem[2] = 32'hB0002273; // csrr x4, mcycle
-        soc.main_memory.mem[3] = 32'hB02022F3; // csrr x5, minstret
-        soc.main_memory.mem[4] = 32'h00118193; // addi x3, x3, 1
-        soc.main_memory.mem[5] = 32'h023181B3; // mul x3, x3, x3
-        soc.main_memory.mem[6] = 32'hFFF10113; // addi x2, x2, -1
-        soc.main_memory.mem[7] = 32'hFE011AE3; // bne x2, x0, loop (-12)
-        soc.main_memory.mem[8] = 32'hB0002373; // csrr x6, mcycle
-        soc.main_memory.mem[9] = 32'hB02023F3; // csrr x7, minstret
-        soc.main_memory.mem[10] = 32'h40430433; // sub x8, x6, x4
-        soc.main_memory.mem[11] = 32'h405384B3; // sub x9, x7, x5
-        soc.main_memory.mem[12] = 32'h00001537; // lui x10, 1 -> 0x1000
-        soc.main_memory.mem[13] = 32'h00852023; // sw x8, 0(x10) -> cycles
-        soc.main_memory.mem[14] = 32'h00952223; // sw x9, 4(x10) -> insts
-        soc.main_memory.mem[15] = 32'h00352423; // sw x3, 8(x10) -> sum
-        soc.main_memory.mem[16] = 32'h0000006F; // j 0
-        
-        for (i = 17; i < 2000; i = i + 1) begin
-            soc.main_memory.mem[i] = 32'h00000013;
-        end
+        $readmemh("d:/riscv/basic_rv32s/software/build/coremark/coremark.hex", soc.main_memory.mem);
 
         #20;
         rst = 0;
@@ -81,6 +61,13 @@ module RV32_SoC_Benchmark_tb;
         end
 
         $finish;
+    end
+
+    // 监控 UART 发送，并打印到仿真控制台
+    always @(posedge clk) begin
+        if (mmio_uart_tx_start) begin
+            $write("%c", mmio_uart_tx_data);
+        end
     end
 
 endmodule

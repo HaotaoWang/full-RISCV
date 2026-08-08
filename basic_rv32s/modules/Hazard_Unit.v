@@ -42,6 +42,7 @@ module HazardUnit (
     input wire EX_csr_write_enable,
 
     input wire EX_jump,
+    input wire ID_jump,  // 新增：ID 阶段的跳转信号
     input wire branch_prediction_miss,
 
     // to Forward Unit - ALU forwarding
@@ -126,7 +127,20 @@ module HazardUnit (
             csr_reg_hazard = 1'b1;
         end*/
 
-        if (trap_done && (branch_prediction_miss || EX_jump)) begin
+        // 🔧 方案 A 修复：ID 阶段跳转判断
+        //
+        // ID 阶段跳转（JAL/JALR）：
+        // - 只冲刷 IF 阶段的错误指令（PC+4）
+        // - 不冲刷 ID 阶段（让 JAL 继续执行，写返回地址）
+        // - ID_EX_Register 会阻止 ID_jump 传递到 EX_jump
+        if (trap_done && ID_jump) begin
+            IF_ID_flush = 1'b1;
+            // ID_EX_flush = 1'b0; // 让 JAL 正常执行
+        end
+        // 分支预测错误或 EX 阶段跳转（向后兼容）：
+        // - 需要冲刷 IF 和 ID 阶段
+        // - 使用 else if 防止与 ID_jump 同时触发
+        else if (trap_done && (branch_prediction_miss || EX_jump)) begin
             IF_ID_flush = 1'b1;
             ID_EX_flush = 1'b1;
         end
@@ -158,12 +172,11 @@ module HazardUnit (
             EX_MEM_stall = 1'b1;
             MEM_WB_stall = 1'b1;
         end else if (if_valid && !if_ready) begin
-            // Instruction memory is busy, freeze IF stage
+            // Instruction memory is busy, freeze entire pipeline
             IF_ID_stall = 1'b1;
-            // Note: Control_Unit will automatically assert pc_stall when IF_ID_stall is 1
-            // CRITICAL: We must insert a bubble into ID_EX, otherwise the instruction in ID
-            // will be duplicated endlessly into EX while IF is stalled!
-            ID_EX_flush = 1'b1;
+            ID_EX_stall = 1'b1;
+            EX_MEM_stall = 1'b1;
+            MEM_WB_stall = 1'b1;
         end else if (load_use_hazard) begin
             // Load-Use Hazard: Stall IF and ID, insert bubble in EX
             IF_ID_stall = 1'b1;

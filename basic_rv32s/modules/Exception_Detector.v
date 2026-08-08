@@ -22,6 +22,10 @@ module ExceptionDetector (
     input [1:0] branch_target_lsbs,        // LSBs of branch target
     input branch_estimation,
     
+    // Interrupt Inputs
+    input timer_interrupt_pending,
+    input external_interrupt_pending,
+    
     output reg trapped,                // signal indicating if trap has occurred
     output reg [3:0] trap_status    // current trap status
 );
@@ -126,57 +130,19 @@ module ExceptionDetector (
             end
 
             `OPCODE_STORE: begin
-                case (EX_funct3)
-                    `STORE_SH: begin
-                        if (alu_result[0] == 1'b1) begin
-                            EX_trapped = 1'b1;
-                            EX_trap_status = `TRAP_MISALIGNED_STORE;
-                        end else begin
-                            EX_trapped = 1'b0;
-                            EX_trap_status = `TRAP_NONE;
-                        end
-                    end
-                    `STORE_SW: begin
-                        if (alu_result[1:0] != 2'b00) begin
-                            EX_trapped = 1'b1;
-                            EX_trap_status = `TRAP_MISALIGNED_STORE;
-                        end else begin
-                            EX_trapped = 1'b0;
-                            EX_trap_status = `TRAP_NONE;
-                        end
-                    end
-                    default: begin
-                        EX_trapped = 1'b0;
-                        EX_trap_status = `TRAP_NONE;
-                    end 
-                endcase
+                // Alignment check moved to MEM stage (using MEM_alu_result)
+                // EX stage uses combinational alu_result which may have glitches
+                // Do NOT check alignment in EX stage - always pass through
+                EX_trapped = 1'b0;
+                EX_trap_status = `TRAP_NONE;
             end
 
             `OPCODE_LOAD: begin
-                case (EX_funct3)
-                    `LOAD_LH, `LOAD_LHU: begin
-                        if (alu_result[0] == 1'b1) begin
-                            EX_trapped = 1'b1;
-                            EX_trap_status = `TRAP_MISALIGNED_LOAD;
-                        end else begin
-                            EX_trapped = 1'b0;
-                            EX_trap_status = `TRAP_NONE;
-                        end
-                    end
-                    `LOAD_LW: begin
-                        if (alu_result[1:0] != 2'b00) begin
-                            EX_trapped = 1'b1;
-                            EX_trap_status = `TRAP_MISALIGNED_LOAD;
-                        end else begin
-                            EX_trapped = 1'b0;
-                            EX_trap_status = `TRAP_NONE;
-                        end
-                    end
-                    default: begin
-                        EX_trapped = 1'b0;
-                        EX_trap_status = `TRAP_NONE;
-                    end
-                endcase
+                // Alignment check moved to MEM stage (using MEM_alu_result)
+                // EX stage uses combinational alu_result which may have glitches
+                // Do NOT check alignment in EX stage - always pass through
+                EX_trapped = 1'b0;
+                EX_trap_status = `TRAP_NONE;
             end
             `OPCODE_JAL, `OPCODE_JALR: begin
                 if (alu_result == 2'b0) begin
@@ -251,7 +217,7 @@ module ExceptionDetector (
                 endcase
             end
             `OPCODE_JAL, `OPCODE_JALR: begin
-                if (MEM_alu_result == 2'b0) begin
+                if (MEM_alu_result[1:0] == 2'b00) begin
                     MEM_trapped = 1'b0;
                     MEM_trap_status = `TRAP_NONE;
                 end else begin
@@ -265,7 +231,13 @@ module ExceptionDetector (
             end
         endcase
 
-        if (MEM_trapped) begin
+        if (external_interrupt_pending) begin
+            trapped_combinatorial = 1'b1;
+            trap_status_combinatorial = `TRAP_EXTERNAL_INTERRUPT;
+        end else if (timer_interrupt_pending) begin
+            trapped_combinatorial = 1'b1;
+            trap_status_combinatorial = `TRAP_TIMER_INTERRUPT;
+        end else if (MEM_trapped) begin
             trapped_combinatorial = 1'b1;
             trap_status_combinatorial = MEM_trap_status;
         end else if (EX_trapped) begin
