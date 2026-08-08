@@ -166,6 +166,14 @@ module RV32I46F5SPMMIO #(
 	wire [2:0] register_file_write_data_select;
     wire cu_csr_write_enable;
 
+    // ID阶段跳转信号
+    wire ID_jump = jump;  // ID阶段的跳转信号
+    wire [XLEN-1:0] ID_jump_target;  // ID阶段的跳转目标地址
+
+    // 计算ID阶段跳转目标（JAL/JALR在ID阶段就能确定目标）
+    assign ID_jump_target = (opcode == `OPCODE_JAL)  ? (ID_pc + imm) :
+                            (opcode == `OPCODE_JALR) ? (read_data1 + imm) : 32'h0;
+
     // Branch Logic and Branch Predictor
     wire branch_taken;
     wire [XLEN-1:0] branch_target;

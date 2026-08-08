@@ -22,6 +22,8 @@ iverilog -g2012 -o sim.vvp \
   modules/cache/dcache_mux.v \
   modules/cache/dcache_pmem_mux.v \
   modules/cache/icache.v \
+  modules/cache/icache_data_ram.v \
+  modules/cache/icache_tag_ram.v \
   ../verilog-axi/rtl/axi_interconnect.v \
   ../verilog-axi/rtl/arbiter.v \
   ../verilog-axi/rtl/priority_encoder.v \
