@@ -164,6 +164,10 @@ module RV32_SoC_AXI_Top #(
     wire [ 7:0] clint_awlen;
     wire [ 2:0] clint_awsize;
     wire [ 1:0] clint_awburst;
+    wire [ 0:0] clint_awlock;
+    wire [ 3:0] clint_awcache;
+    wire [ 2:0] clint_awprot;
+    wire [ 3:0] clint_awqos;
     wire        clint_wvalid, clint_wready;
     wire [31:0] clint_wdata;
     wire [ 3:0] clint_wstrb;
@@ -177,6 +181,10 @@ module RV32_SoC_AXI_Top #(
     wire [ 7:0] clint_arlen;
     wire [ 2:0] clint_arsize;
     wire [ 1:0] clint_arburst;
+    wire [ 0:0] clint_arlock;
+    wire [ 3:0] clint_arcache;
+    wire [ 2:0] clint_arprot;
+    wire [ 3:0] clint_arqos;
     wire        clint_rvalid, clint_rready;
     wire [31:0] clint_rdata;
     wire [ 3:0] clint_rid;
@@ -326,10 +334,10 @@ module RV32_SoC_AXI_Top #(
         .m_axi_awlen    ({clint_awlen,   ram_awlen}),
         .m_axi_awsize   ({clint_awsize,  ram_awsize}),
         .m_axi_awburst  ({clint_awburst, ram_awburst}),
-        .m_axi_awlock   ({               ram_awlock}),
-        .m_axi_awcache  ({               ram_awcache}),
-        .m_axi_awprot   ({               ram_awprot}),
-        .m_axi_awqos    ({               ram_awqos}),
+        .m_axi_awlock   ({clint_awlock,  ram_awlock}),
+        .m_axi_awcache  ({clint_awcache, ram_awcache}),
+        .m_axi_awprot   ({clint_awprot,  ram_awprot}),
+        .m_axi_awqos    ({clint_awqos,   ram_awqos}),
         .m_axi_awvalid  ({clint_awvalid, ram_awvalid}),
         .m_axi_awready  ({clint_awready, ram_awready}),
         .m_axi_wdata    ({clint_wdata,   ram_wdata}),
@@ -346,10 +354,10 @@ module RV32_SoC_AXI_Top #(
         .m_axi_arlen    ({clint_arlen,   ram_arlen}),
         .m_axi_arsize   ({clint_arsize,  ram_arsize}),
         .m_axi_arburst  ({clint_arburst, ram_arburst}),
-        .m_axi_arlock   ({               ram_arlock}),
-        .m_axi_arcache  ({               ram_arcache}),
-        .m_axi_arprot   ({               ram_arprot}),
-        .m_axi_arqos    ({               ram_arqos}),
+        .m_axi_arlock   ({clint_arlock,  ram_arlock}),
+        .m_axi_arcache  ({clint_arcache, ram_arcache}),
+        .m_axi_arprot   ({clint_arprot,  ram_arprot}),
+        .m_axi_arqos    ({clint_arqos,   ram_arqos}),
         .m_axi_arvalid  ({clint_arvalid, ram_arvalid}),
         .m_axi_arready  ({clint_arready, ram_arready}),
         .m_axi_rid      ({clint_rid,     ram_rid}),

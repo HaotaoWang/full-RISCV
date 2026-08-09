@@ -32,8 +32,8 @@ set_property -dict { PACKAGE_PIN J11   IOSTANDARD LVCMOS33 } [get_ports { led[3]
 # 注意: CP2104_TXD 是芯片发送端, 对应 FPGA 的接收端 (RX)
 #       CP2104_RXD 是芯片接收端, 对应 FPGA 的发送端 (TX)
 ##########################################################################################
-# set_property -dict { PACKAGE_PIN V24   IOSTANDARD LVCMOS33 } [get_ports { uart_rx }]
-# set_property -dict { PACKAGE_PIN U22   IOSTANDARD LVCMOS33 } [get_ports { uart_tx }]
+set_property -dict { PACKAGE_PIN V24   IOSTANDARD LVCMOS33 } [get_ports { uart_rx }]
+set_property -dict { PACKAGE_PIN U22   IOSTANDARD LVCMOS33 } [get_ports { uart_tx }]
 
 ##########################################################################################
 # 时序约束

@@ -5,6 +5,7 @@ module TrapController #(
 )(
     input wire clk,
     input wire reset,
+    input wire [XLEN-1:0] current_pc,
     input wire [XLEN-1:0] ID_pc,
     input wire [XLEN-1:0] EX_pc,
     input wire [XLEN-1:0] MEM_pc,
@@ -28,26 +29,6 @@ module TrapController #(
     output reg trap_jump,
     output reg standby_mode
 );
-
-// Exception Cause Code Mapping
-reg [31:0] exception_cause;
-always @(*) begin
-    if (trap_status == `TRAP_EBREAK) exception_cause = 32'd3;
-    else if (trap_status == `TRAP_ECALL) begin
-        if (current_mode == 2'b11) exception_cause = 32'd11;
-        else if (current_mode == 2'b01) exception_cause = 32'd9;
-        else exception_cause = 32'd8;
-    end
-    else if (trap_status == `TRAP_MISALIGNED_LOAD) exception_cause = 32'd4;
-    else if (trap_status == `TRAP_MISALIGNED_STORE) exception_cause = 32'd6;
-    else if (trap_status == `TRAP_TIMER_INTERRUPT) exception_cause = 32'h8000_0007;
-    else if (trap_status == `TRAP_EXTERNAL_INTERRUPT) exception_cause = 32'h8000_000B;
-    else exception_cause = 32'd0; // TRAP_MISALIGNED_INSTRUCTION
-end
-
-wire is_interrupt = exception_cause[31];
-wire [4:0] cause_code = exception_cause[4:0];
-wire delegated_to_s = (current_mode <= 2'b01) && (is_interrupt ? mideleg[cause_code] : medeleg[cause_code]);
 
 // FSM States
 localparam  IDLE          = 4'b0000,
@@ -73,17 +54,56 @@ localparam  IDLE          = 4'b0000,
 
 // traditional FSM state architecture
 reg [3:0] trap_handle_state, next_trap_handle_state;
+reg [3:0] active_trap_status;
+reg [XLEN-1:0] active_trap_pc;
 reg debug_mode_reg; 
+
+// A trap request is a level that may disappear while the pre-trap FSM is
+// running (most notably after UPDATE_MODE clears mstatus.MIE).  Keep the cause
+// and resume PC stable until the complete CSR-write/redirect sequence ends.
+wire [3:0] handled_trap_status = (trap_handle_state == IDLE) ?
+                                 trap_status : active_trap_status;
+wire [XLEN-1:0] incoming_trap_pc = (EX_pc != {XLEN{1'b0}}) ? EX_pc :
+                                      (ID_pc != {XLEN{1'b0}}) ? ID_pc :
+                                      current_pc;
+
+// Exception Cause Code Mapping
+reg [31:0] exception_cause;
+always @(*) begin
+    if (handled_trap_status == `TRAP_EBREAK) exception_cause = 32'd3;
+    else if (handled_trap_status == `TRAP_ECALL) begin
+        if (current_mode == 2'b11) exception_cause = 32'd11;
+        else if (current_mode == 2'b01) exception_cause = 32'd9;
+        else exception_cause = 32'd8;
+    end
+    else if (handled_trap_status == `TRAP_MISALIGNED_LOAD) exception_cause = 32'd4;
+    else if (handled_trap_status == `TRAP_MISALIGNED_STORE) exception_cause = 32'd6;
+    else if (handled_trap_status == `TRAP_TIMER_INTERRUPT) exception_cause = 32'h8000_0007;
+    else if (handled_trap_status == `TRAP_EXTERNAL_INTERRUPT) exception_cause = 32'h8000_000B;
+    else exception_cause = 32'd0; // TRAP_MISALIGNED_INSTRUCTION
+end
+
+wire is_interrupt = exception_cause[31];
+wire [4:0] cause_code = exception_cause[4:0];
+wire delegated_to_s = (current_mode <= 2'b01) && (is_interrupt ? mideleg[cause_code] : medeleg[cause_code]);
 
 // FSM update logic and debug_mode register update
 always @(posedge clk or posedge reset) begin
     if (reset) begin
         trap_handle_state <= IDLE;
+        active_trap_status <= `TRAP_NONE;
+        active_trap_pc <= {XLEN{1'b0}};
         debug_mode_reg <= 1'b0; 
     end else begin
         trap_handle_state <= next_trap_handle_state;
+        if ((trap_handle_state == IDLE) && (trap_status != `TRAP_NONE)) begin
+            active_trap_status <= trap_status;
+            active_trap_pc <= incoming_trap_pc;
+        end else if ((trap_handle_state != IDLE) && (next_trap_handle_state == IDLE)) begin
+            active_trap_status <= `TRAP_NONE;
+        end
         // debug_mode logics
-        case (trap_status)
+        case (handled_trap_status)
             `TRAP_MRET: begin
                 if (trap_handle_state == IDLE) begin
                     debug_mode_reg <= 1'b0;
@@ -122,7 +142,7 @@ always @(*) begin
     // default next state
     next_trap_handle_state = IDLE;
 
-    case (trap_status)
+    case (handled_trap_status)
         // traps that doesn't require multiple PTH FSM
         `TRAP_NONE: begin
             next_trap_handle_state = IDLE;
@@ -137,17 +157,17 @@ always @(*) begin
         default: begin
             case (trap_handle_state)
                 IDLE: begin 
-                    if (trap_status == `TRAP_MRET) begin
+                    if (handled_trap_status == `TRAP_MRET) begin
                         csr_trap_address = 12'h341; // mepc
                         trap_done = 1'b0;
                         next_trap_handle_state = READ_MEPC;
 
-                    end else if (trap_status == `TRAP_SRET) begin
+                    end else if (handled_trap_status == `TRAP_SRET) begin
                         csr_trap_address = 12'h141; // sepc
                         trap_done = 1'b0;
                         next_trap_handle_state = READ_SEPC;
 
-                    end else if (trap_status == `TRAP_ECALL) begin
+                    end else if (handled_trap_status == `TRAP_ECALL || handled_trap_status == `TRAP_TIMER_INTERRUPT || handled_trap_status == `TRAP_EXTERNAL_INTERRUPT) begin
                         standby_mode = 1'b1;
                         trap_done = 1'b0;
                         next_trap_handle_state = MEM_STANDBY;
@@ -185,7 +205,7 @@ always @(*) begin
                     // write current pc value to EPC CSR
                     csr_write_enable = 1'b1;
                     csr_trap_address = delegated_to_s ? 12'h141 : 12'h341; // sepc or mepc
-                    csr_trap_write_data = EX_pc;
+                    csr_trap_write_data = active_trap_pc;
                     trap_done = 1'b0;
                     next_trap_handle_state = WRITE_EPC;
                 end
@@ -210,7 +230,7 @@ always @(*) begin
 
                 WRITE_CAUSE: begin
                     // Enable debug mode for EBREAK and PTH escape
-                    if (trap_status == `TRAP_EBREAK) begin
+                    if (handled_trap_status == `TRAP_EBREAK) begin
                         trap_done = 1'b1;
                         next_trap_handle_state = IDLE;
                     end
@@ -228,9 +248,9 @@ always @(*) begin
                     // keep tvec value output
                     csr_trap_address = delegated_to_s ? 12'h105 : 12'h305;
                     trap_target = csr_read_data;
-                    if (trap_status == `TRAP_MISALIGNED_INSTRUCTION) begin
+                    if (handled_trap_status == `TRAP_MISALIGNED_INSTRUCTION) begin
                         misaligned_instruction_flush = 1'b1;
-                    end else if (trap_status == `TRAP_MISALIGNED_STORE || trap_status == `TRAP_MISALIGNED_LOAD) begin
+                    end else if (handled_trap_status == `TRAP_MISALIGNED_STORE || handled_trap_status == `TRAP_MISALIGNED_LOAD) begin
                         misaligned_memory_flush = 1'b1;
                     end
                     trap_done = 1'b1;
@@ -243,9 +263,9 @@ always @(*) begin
                     // keep tvec value output
                     csr_trap_address = delegated_to_s ? 12'h105 : 12'h305;
                     trap_target = csr_read_data;
-                    if (trap_status == `TRAP_MISALIGNED_INSTRUCTION) begin
+                    if (handled_trap_status == `TRAP_MISALIGNED_INSTRUCTION) begin
                         misaligned_instruction_flush = 1'b1;
-                    end else if (trap_status == `TRAP_MISALIGNED_STORE || trap_status == `TRAP_MISALIGNED_LOAD) begin
+                    end else if (handled_trap_status == `TRAP_MISALIGNED_STORE || handled_trap_status == `TRAP_MISALIGNED_LOAD) begin
                         misaligned_memory_flush = 1'b1;
                     end
                     trap_done = 1'b1;

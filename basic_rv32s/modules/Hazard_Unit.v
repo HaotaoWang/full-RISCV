@@ -22,8 +22,10 @@ module HazardUnit (
     input wire [4:0] ID_rs1,
     input wire [4:0] ID_rs2,
     input wire [11:0] ID_raw_imm,
-    
+    input wire [6:0] ID_opcode,        // 新增：用于检测 JALR Load-Use 冒险
+
     input wire [4:0] MEM_rd,
+    input wire [6:0] MEM_opcode,       // 新增：用于检测 MEM 阶段的 Load 指令
     input wire MEM_register_write_enable,
     input wire MEM_csr_write_enable,
     input wire [11:0] MEM_csr_write_address,       // MEM_imm[11:0]
@@ -42,7 +44,7 @@ module HazardUnit (
     input wire EX_csr_write_enable,
 
     input wire EX_jump,
-    input wire ID_jump,  // 新增：ID 阶段的跳转信号
+    input wire ID_jump,  // 新增：ID 阶段的跳转信�?
     input wire branch_prediction_miss,
 
     // to Forward Unit - ALU forwarding
@@ -79,10 +81,25 @@ module HazardUnit (
     // Store instruction rs2 hazard detections
     assign store_hazard_mem = is_store && mem_hazard_rs2;
     assign store_hazard_wb = is_store && wb_hazard_rs2 && !mem_hazard_rs2;
-    
-    // Load-Use hazard detection
+
+    // Load-Use hazard detection (for normal instructions in EX stage)
     wire load_use_hazard = (EX_opcode == `OPCODE_LOAD) && (EX_rd != 5'd0) && ((EX_rd == ID_rs1) || (EX_rd == ID_rs2));
-    
+
+    // ========================================================================
+    // JALR Load-Use 冒险检测
+    // ========================================================================
+    // JALR 在 ID 阶段就需要读取 rs1 来计算跳转目标，但如果 EX 或 MEM 阶段的
+    // Load 指令正在写入 rs1，数据还没准备好，需要插入 stall
+    //
+    // 检测条件：
+    // 1. ID 阶段是 JALR 指令
+    // 2. rs1 不是 x0（x0 恒为 0，不会有冒险）
+    // 3. EX 阶段的 Load 指令目标是 rs1，或
+    // 4. MEM 阶段的 Load 指令目标是 rs1
+    wire jalr_load_use_hazard = (ID_opcode == `OPCODE_JALR) && (ID_rs1 != 5'd0) &&
+                                 (((EX_opcode == `OPCODE_LOAD) && (EX_rd == ID_rs1)) ||
+                                  ((MEM_opcode == `OPCODE_LOAD) && (MEM_rd == ID_rs1)));
+
     // CSR hazard detection
     assign csr_hazard_mem = MEM_csr_write_enable && (MEM_csr_write_address == EX_imm);
     assign csr_hazard_wb = WB_csr_write_enable && (WB_csr_write_address == EX_imm);
@@ -102,7 +119,7 @@ module HazardUnit (
     end 
 
     always @(*) begin
-        //csr_reg_hazard = 1'b0;
+        // default status
         hazard_mem = 2'b00;
         hazard_wb = 2'b00;
         IF_ID_flush = 1'b0;
@@ -116,43 +133,15 @@ module HazardUnit (
         MEM_WB_stall = 1'b0;
 
         // ALU forwarding hazards
-        // For Store instructions, rs2 hazard shouldn't trigger ALUsrcB forwarding.
-        // In this case, rs2 is store data, not ALU operand.
         hazard_mem[0] = mem_hazard_rs1;
-        hazard_mem[1] = is_store ? 1'b0 : mem_hazard_rs2; // Disables ALUsrcB forwarding for store
+        hazard_mem[1] = is_store ? 1'b0 : mem_hazard_rs2;
         hazard_wb[0] = wb_hazard_rs1 && !mem_hazard_rs1;
-        hazard_wb[1] = is_store ? 1'b0 : (wb_hazard_rs2 && !mem_hazard_rs2); // Disables ALUsrcB forwarding for store
+        hazard_wb[1] = is_store ? 1'b0 : (wb_hazard_rs2 && !mem_hazard_rs2);
 
-        /*if (reg_csr_hazard) begin
-            csr_reg_hazard = 1'b1;
-        end*/
-
-        // 🔧 方案 A 修复：ID 阶段跳转判断
-        //
-        // ID 阶段跳转（JAL/JALR）：
-        // - 只冲刷 IF 阶段的错误指令（PC+4）
-        // - 不冲刷 ID 阶段（让 JAL 继续执行，写返回地址）
-        // - ID_EX_Register 会阻止 ID_jump 传递到 EX_jump
-        if (trap_done && ID_jump) begin
-            IF_ID_flush = 1'b1;
-            // ID_EX_flush = 1'b0; // 让 JAL 正常执行
-        end
-        // 分支预测错误或 EX 阶段跳转（向后兼容）：
-        // - 需要冲刷 IF 和 ID 阶段
-        // - 使用 else if 防止与 ID_jump 同时触发
-        else if (trap_done && (branch_prediction_miss || EX_jump)) begin
-            IF_ID_flush = 1'b1;
-            ID_EX_flush = 1'b1;
-        end
-
-        if (pth_done_flush) begin
-            IF_ID_flush = 1'b1;
-            ID_EX_flush = 1'b1;
-            EX_MEM_flush = 1'b1;
-            MEM_WB_flush = 1'b1;
-        end
-
-        if (standby_mode) begin // For ID Phase Excpetion handling
+        // ==========================================
+        // 1. Stall Logic
+        // ==========================================
+        if (standby_mode) begin
             IF_ID_stall = 1'b1;
             ID_EX_stall = 1'b1;
             EX_MEM_stall = 1'b0;
@@ -162,26 +151,47 @@ module HazardUnit (
             ID_EX_stall = 1'b1;
             EX_MEM_stall = 1'b1;
             MEM_WB_stall = 1'b1;
-        end
-
-        // AXI Memory Stall Logic
-        if (mem_valid && !mem_ready) begin
+        end else if (mem_valid && !mem_ready) begin
             // Data memory is busy, freeze everything
             IF_ID_stall = 1'b1;
             ID_EX_stall = 1'b1;
             EX_MEM_stall = 1'b1;
             MEM_WB_stall = 1'b1;
-        end else if (if_valid && !if_ready) begin
-            // Instruction memory is busy, freeze entire pipeline
-            IF_ID_stall = 1'b1;
-            ID_EX_stall = 1'b1;
-            EX_MEM_stall = 1'b1;
-            MEM_WB_stall = 1'b1;
-        end else if (load_use_hazard) begin
-            // Load-Use Hazard: Stall IF and ID, insert bubble in EX
+        end else if (jalr_load_use_hazard) begin
+            // JALR Load-Use Hazard
             IF_ID_stall = 1'b1;
             ID_EX_flush = 1'b1;
+        end else if (load_use_hazard) begin
+            // Load-Use Hazard
+            IF_ID_stall = 1'b1;
+            ID_EX_flush = 1'b1;
+        end else if (if_valid && !if_ready && !ID_jump) begin
+            // Freeze the front end while instruction memory is busy.  On an
+            // EX redirect the control-flow instruction must still advance to
+            // MEM/WB; otherwise ID_EX_flush would discard the JAL before it
+            // can write PC+4 into rd.
+            IF_ID_stall = 1'b1;
+            ID_EX_stall = 1'b1;
+            EX_MEM_stall = !(EX_jump || branch_prediction_miss);
+            MEM_WB_stall = !(EX_jump || branch_prediction_miss);
+        end
+
+        // ==========================================
+        // 2. Flush Logic
+        // ==========================================
+        if (pth_done_flush) begin
+            IF_ID_flush = 1'b1;
+            ID_EX_flush = 1'b1;
+            EX_MEM_flush = 1'b1;
+            MEM_WB_flush = 1'b1;
+        end
+        else if (trap_done && (branch_prediction_miss || EX_jump)) begin
+            IF_ID_flush = 1'b1;
+            ID_EX_flush = 1'b1;
+        end
+        else if (trap_done && ID_jump && !IF_ID_stall) begin
+            // ID jump (JAL/JALR)
+            IF_ID_flush = 1'b1;
         end
     end
-
 endmodule

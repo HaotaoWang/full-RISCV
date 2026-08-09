@@ -18,15 +18,11 @@ module BranchPredictor #(
     reg branch_prediction;
     wire [XLEN-1:0] prediction_target = branch_estimation ? (IF_pc + IF_imm) : (IF_pc + {{XLEN-3{1'b0}},3'd4});
 
+    // Disable redirects until the fetch path can cancel outstanding responses.
+    // Branches are resolved in EX and corrected by branch_prediction_miss.
     always @(*) begin
-        if (IF_opcode == `OPCODE_BRANCH) begin
-            branch_estimation = prediction_counter[1];
-            branch_target = prediction_target;
-        end
-        else begin
-            branch_estimation = 1'b0;
-            branch_target = {XLEN{1'b0}};
-        end
+        branch_estimation = 1'b0;
+        branch_target = IF_pc + {{XLEN-3{1'b0}}, 3'd4};
     end
 
     always @(posedge clk or posedge reset) begin

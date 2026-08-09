@@ -20,17 +20,20 @@ create_project ${project_name} ${project_dir} -part ${part_name} -force
 #       RV32I46F_5SP_MMIO.v 里的 `include 引入了, 不要重复添加!
 add_files -norecurse {
     ./fpga/My_Kintex7_RV32_SoC/FPGA_Top.v
+    ./RV32_SoC_AXI_Top.v
     ./modules/RV32I46F_5SP_MMIO.v
-    ./modules/axil_ram_init.v
+    ./modules/axi_ram_init.v
+    ./modules/axi_clint.v
     ./modules/headers/alu_src_select.vh
     ./modules/headers/rf_wd_select.vh
 }
+add_files -norecurse [glob ./modules/cache/*.v]
 set_property is_global_include true [get_files ./modules/headers/alu_src_select.vh]
 set_property is_global_include true [get_files ./modules/headers/rf_wd_select.vh]
 
 # 3. 添加 verilog-axi 库的核心总线文件
 add_files -norecurse {
-    ../verilog-axi/rtl/axil_interconnect.v
+    ../verilog-axi/rtl/axi_interconnect.v
     ../verilog-axi/rtl/arbiter.v
     ../verilog-axi/rtl/priority_encoder.v
 }
@@ -39,8 +42,8 @@ add_files -norecurse {
 set_property include_dirs { {./} {./modules} } [current_fileset]
 
 # 5. 添加 Hex 初始化文件 (必须设为 Memory Initialization Files)
-add_files -norecurse ./fpga/My_Kintex7_RV32_SoC/program.hex
-set_property file_type "Memory Initialization Files" [get_files ./fpga/My_Kintex7_RV32_SoC/program.hex]
+add_files -norecurse ./rtthread.hex
+set_property file_type "Memory Initialization Files" [get_files ./rtthread.hex]
 
 # 6. 添加管脚约束文件 (XDC)
 add_files -fileset constrs_1 -norecurse ./fpga/My_Kintex7_RV32_SoC/Kintex_MK160FA.xdc

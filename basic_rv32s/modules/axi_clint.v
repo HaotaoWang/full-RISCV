@@ -56,6 +56,7 @@ module axi_clint #(
     // CLINT Registers
     reg [63:0] mtime;
     reg [63:0] mtimecmp;
+    reg [ADDR_WIDTH-1:0] read_addr_q;
 
     // Interrupt Generation (mtime >= mtimecmp)
     assign timer_irq = (mtime >= mtimecmp);
@@ -129,26 +130,28 @@ module axi_clint #(
             s_axi_rlast <= 1'b0;
             s_axi_rdata <= 32'b0;
             s_axi_rid <= {ID_WIDTH{1'b0}};
+            read_addr_q <= {ADDR_WIDTH{1'b0}};
         end else begin
             if (s_axi_arvalid && !s_axi_arready && !s_axi_rvalid) begin
                 s_axi_arready <= 1'b1;
+                s_axi_rid <= s_axi_arid;
+                read_addr_q <= s_axi_araddr;
+            end else if (s_axi_arready) begin
+                // The interconnect establishes the read route on the AR
+                // handshake.  Return data one cycle later and hold it until
+                // the master accepts it.
+                s_axi_arready <= 1'b0;
                 s_axi_rvalid <= 1'b1;
                 s_axi_rlast <= 1'b1;
-                s_axi_rid <= s_axi_arid;
-                
-                // Read Multiplexer
-                if (s_axi_araddr[15:0] == 16'h4000) s_axi_rdata <= mtimecmp[31:0];
-                else if (s_axi_araddr[15:0] == 16'h4004) s_axi_rdata <= mtimecmp[63:32];
-                else if (s_axi_araddr[15:0] == 16'hBFF8) s_axi_rdata <= mtime[31:0];
-                else if (s_axi_araddr[15:0] == 16'hBFFC) s_axi_rdata <= mtime[63:32];
+
+                if (read_addr_q[15:0] == 16'h4000) s_axi_rdata <= mtimecmp[31:0];
+                else if (read_addr_q[15:0] == 16'h4004) s_axi_rdata <= mtimecmp[63:32];
+                else if (read_addr_q[15:0] == 16'hBFF8) s_axi_rdata <= mtime[31:0];
+                else if (read_addr_q[15:0] == 16'hBFFC) s_axi_rdata <= mtime[63:32];
                 else s_axi_rdata <= 32'b0;
-                
             end else if (s_axi_rvalid && s_axi_rready) begin
                 s_axi_rvalid <= 1'b0;
-                s_axi_arready <= 1'b0;
                 s_axi_rlast <= 1'b0;
-            end else begin
-                s_axi_arready <= 1'b0;
             end
         end
     end

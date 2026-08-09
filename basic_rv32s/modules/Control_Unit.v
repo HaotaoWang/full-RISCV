@@ -12,9 +12,10 @@ module ControlUnit (
 	input trap_done,	// 异常处理完成信号
 	input csr_ready,    // CSR (控制状态寄存器) 准备就绪信号
 	input IF_ID_stall,  // 流水线取指/译码段阻塞信号
+	input trap_jump,    // 异常跳转信号
 	input [6:0] opcode, // 从指令译码器传来的操作码 (决定了大类)
 	input [2:0] funct3, // 从指令译码器传来的功能码 (决定了具体操作)
-    
+
 	output reg jump,                                 // 是否为无条件跳转指令
 	output reg branch,                               // 是否为条件分支指令
 	output reg [1:0] alu_src_A_select,               // ALU 的 A 端口输入选择 (如：PC 还是 寄存器1)
@@ -27,9 +28,12 @@ module ControlUnit (
 	output reg pc_stall                              // PC 暂停/阻塞信号 (遇到冲突或等待时停止更新 PC)
 );
 
+    // 检测是否是跳转指令（JAL/JALR）
+    wire is_jump = (opcode == 7'b1101111) || (opcode == 7'b1100111);
+
     always @(*) begin
         // 任何处于等待状态的情况，都需要暂停 PC 的更新
-		pc_stall = (!write_done || !trap_done || !csr_ready || IF_ID_stall);
+		pc_stall = (!write_done || !trap_done || !csr_ready || IF_ID_stall) && !trap_jump;
         
         // -----------------------------------------------------------
         // 初始默认状态：为了防止产生锁存器 (Latch)，在 case 语句之前

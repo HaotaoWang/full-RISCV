@@ -238,7 +238,7 @@ module CSRFile #(
           12'h302: medeleg <= csr_write_data;
           12'h303: mideleg <= csr_write_data;
           12'h304: mie <= csr_write_data;
-          12'h305: mtvec  <= csr_write_data;
+          12'h305: begin mtvec <= csr_write_data; $display("[%0t] CSR_File: mtvec = 0x%08x", $time, csr_write_data); end
           12'h340: mscratch <= csr_write_data;
           12'h341: mepc   <= csr_write_data;
           12'h342: mcause <= csr_write_data;

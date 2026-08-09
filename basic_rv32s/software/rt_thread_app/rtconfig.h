@@ -26,7 +26,8 @@
 
 /* Memory Management */
 #define RT_USING_MEMPOOL
-#define RT_USING_SMALL_MEM
-#define RT_USING_HEAP
+/* Use statically allocated kernel threads/stacks on this 64 KiB target. */
+/* #define RT_USING_SMALL_MEM */
+/* #define RT_USING_HEAP */
 
 #endif

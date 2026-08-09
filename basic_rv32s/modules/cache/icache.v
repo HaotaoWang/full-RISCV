@@ -77,6 +77,7 @@ module icache
     ,output          req_valid_o
     ,output          req_error_o
     ,output [ 31:0]  req_inst_o
+    ,output [ 31:0]  req_pc_o
     ,output          axi_awvalid_o
     ,output [ 31:0]  axi_awaddr_o
     ,output [  3:0]  axi_awid_o
@@ -426,6 +427,7 @@ begin
 end
 
 assign req_inst_o    = inst_r;
+assign req_pc_o      = lookup_addr_q;
 
 //-----------------------------------------------------------------
 // Next State Logic

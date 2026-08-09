@@ -1,0 +1,72 @@
+
+test_jalr_hazard.elf:     file format elf32-littleriscv
+
+
+Disassembly of section .text:
+
+00000000 <_start>:
+   0:	00010137          	lui	sp,0x10
+
+00000004 <test_jal_jalr>:
+   4:	aaaa02b7          	lui	t0,0xaaaa0
+   8:	00128293          	addi	t0,t0,1 # aaaa0001 <__global_pointer$+0xaaa9e741>
+   c:	06c000ef          	jal	78 <func1>
+  10:	aaaa02b7          	lui	t0,0xaaaa0
+  14:	00228293          	addi	t0,t0,2 # aaaa0002 <__global_pointer$+0xaaa9e742>
+
+00000018 <test_addi_jalr>:
+  18:	bbbb02b7          	lui	t0,0xbbbb0
+  1c:	00128293          	addi	t0,t0,1 # bbbb0001 <__global_pointer$+0xbbbae741>
+  20:	00000317          	auipc	t1,0x0
+  24:	00c30313          	addi	t1,t1,12 # 2c <target1>
+  28:	00030067          	jr	t1
+
+0000002c <target1>:
+  2c:	bbbb02b7          	lui	t0,0xbbbb0
+  30:	00228293          	addi	t0,t0,2 # bbbb0002 <__global_pointer$+0xbbbae742>
+
+00000034 <test_load_jalr>:
+  34:	cccc02b7          	lui	t0,0xcccc0
+  38:	00128293          	addi	t0,t0,1 # cccc0001 <__global_pointer$+0xcccbe741>
+  3c:	00001317          	auipc	t1,0x1
+  40:	08430313          	addi	t1,t1,132 # 10c0 <__DATA_BEGIN__>
+  44:	00032383          	lw	t2,0(t1)
+  48:	00038067          	jr	t2
+
+0000004c <target2>:
+  4c:	cccc02b7          	lui	t0,0xcccc0
+  50:	00228293          	addi	t0,t0,2 # cccc0002 <__global_pointer$+0xcccbe742>
+
+00000054 <test_chain_jalr>:
+  54:	dddd02b7          	lui	t0,0xdddd0
+  58:	00128293          	addi	t0,t0,1 # dddd0001 <__global_pointer$+0xdddce741>
+  5c:	00000317          	auipc	t1,0x0
+  60:	02830313          	addi	t1,t1,40 # 84 <chain1>
+  64:	000300e7          	jalr	t1
+  68:	dddd02b7          	lui	t0,0xdddd0
+  6c:	00528293          	addi	t0,t0,5 # dddd0005 <__global_pointer$+0xdddce745>
+  70:	ffff02b7          	lui	t0,0xffff0
+  74:	03c0006f          	j	b0 <end_loop>
+
+00000078 <func1>:
+  78:	0000a337          	lui	t1,0xa
+  7c:	00130313          	addi	t1,t1,1 # a001 <__global_pointer$+0x8741>
+  80:	00008067          	ret
+
+00000084 <chain1>:
+  84:	dddd02b7          	lui	t0,0xdddd0
+  88:	00228293          	addi	t0,t0,2 # dddd0002 <__global_pointer$+0xdddce742>
+  8c:	00000317          	auipc	t1,0x0
+  90:	01830313          	addi	t1,t1,24 # a4 <chain2>
+  94:	000300e7          	jalr	t1
+  98:	dddd02b7          	lui	t0,0xdddd0
+  9c:	00428293          	addi	t0,t0,4 # dddd0004 <__global_pointer$+0xdddce744>
+  a0:	00008067          	ret
+
+000000a4 <chain2>:
+  a4:	dddd02b7          	lui	t0,0xdddd0
+  a8:	00328293          	addi	t0,t0,3 # dddd0003 <__global_pointer$+0xdddce743>
+  ac:	00008067          	ret
+
+000000b0 <end_loop>:
+  b0:	0000006f          	j	b0 <end_loop>

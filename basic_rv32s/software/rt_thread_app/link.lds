@@ -15,6 +15,14 @@ SECTIONS
     *(.srodata .srodata.*)
   } > RAM
 
+  /* Keep RT-Thread's automatic initialization table with --gc-sections. */
+  .rti_fn : {
+    . = ALIGN(4);
+    KEEP(*(SORT_BY_NAME(.rti_fn.*)))
+    . = ALIGN(4);
+  } > RAM
+
+
   .data : {
     . = ALIGN(4);
     PROVIDE( __global_pointer$ = . + 0x800 );

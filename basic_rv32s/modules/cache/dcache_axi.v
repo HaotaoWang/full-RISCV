@@ -205,7 +205,7 @@ u_axi
     .inport_wdata_i(req_w[63:32]),
     .inport_wstrb_i(req_w[67:64]),    
     .inport_addr_i({req_w[31:2], 2'b0}),
-    .inport_id_i(AXI_ID),
+    .inport_id_i(AXI_ID[3:0]),
     .inport_len_i(req_len_w),
     .inport_burst_i(2'b01),
     .inport_accept_o(accept_w),

@@ -18,7 +18,7 @@
 `include "modules/CSR_File.v"
 `include "modules/Exception_Detector.v"
 `include "modules/Trap_Controller.v"
-// `include "modules/RV32_AXI_Adapter.v" // 已废弃，替换为 DCache
+`include "modules/RV32_AXI_Adapter.v"
 // DCache 等模块由 Vivado 工程文件或 test.sh 统一添加，避免头文件级联依赖问题
 
 `include "modules/IF_ID_Register.v"
@@ -135,9 +135,38 @@ module RV32I46F5SPMMIO #(
 
     // AXI 握手信号
     wire if_ready;
-    wire if_valid = 1'b1; // 取指始终请求（除非被冻结）
+    wire if_accept;
+    wire [XLEN-1:0] if_response_pc;
+    wire if_valid = 1'b1;
+    reg if_request_pending;
+    reg if_discard_response;
+    wire if_request_issue = !if_request_pending;
+    wire EX_jump_execute = EX_jump && (!mem_valid || mem_ready);
+    wire branch_miss_execute = branch_prediction_miss && (!mem_valid || mem_ready);
+    wire control_redirect = trap_jump || (trap_done && (EX_jump_execute || branch_miss_execute));
+    wire if_pipeline_ready = if_ready && !if_discard_response && !control_redirect;
     wire mem_ready;
+
+    // Serialize instruction fetches so redirects cannot leave stale responses
+    // queued behind the new target PC.
+    always @(posedge clk or posedge reset) begin
+        if (reset) begin
+            if_request_pending <= 1'b0;
+            if_discard_response <= 1'b0;
+        end else begin
+            if (if_ready)
+                if_request_pending <= 1'b0;
+            else if (if_request_issue && if_accept)
+                if_request_pending <= 1'b1;
+
+            if (control_redirect && if_request_pending && !if_ready)
+                if_discard_response <= 1'b1;
+            else if (if_ready)
+                if_discard_response <= 1'b0;
+        end
+    end
     wire mem_valid;
+
 
     assign IF_imm = {{20{instruction[31]}}, instruction[7], instruction[30:25], instruction[11:8], 1'b0};
     assign IF_opcode = (instruction[6:0]);
@@ -213,8 +242,15 @@ module RV32I46F5SPMMIO #(
     reg instruction_retired;
 
     // Exception_Detector
-    wire trapped;
-    wire [3:0]  trap_status;
+    wire trapped_raw;
+    wire [3:0] trap_status_raw;
+    // Precise traps must not overtake an older load/store in MEM.  This is
+    // the same completion rule used by EX redirects: a response completing
+    // in the current cycle is sufficient, but an unfinished transaction is
+    // allowed to drain before mret/ecall/interrupt handling starts.
+    wire trap_mem_complete = !mem_valid || mem_ready;
+    wire trapped = trapped_raw && trap_mem_complete;
+    wire [3:0] trap_status = trapped ? trap_status_raw : `TRAP_NONE;
 
     // Trap Controller
     wire trap_done;
@@ -437,6 +473,7 @@ module RV32I46F5SPMMIO #(
         .trap_done(trap_done),
         .csr_ready(csr_ready),
         .IF_ID_stall(IF_ID_stall),
+        .trap_jump(trap_jump),
 
         .pc_stall(pc_stall),
         .jump(jump),
@@ -515,86 +552,79 @@ module RV32I46F5SPMMIO #(
     // 数据端缓存 (DCache) 与 MMIO 旁路逻辑
     // =====================================================================
     
-    // 如果是正常的 RAM 访存请求（即非 MMIO 命中），则送入 DCache
-    wire dcache_mem_rd = MEM_memory_read && !mmio_uart_status_hit;
-    wire [3:0] dcache_mem_wr = (MEM_memory_write && !mmio_uart_status_hit) ? write_mask : 4'b0000;
-
-    // 根据物理地址判断是否 cacheable
-    // MMIO 区域 (0x1000_0000 - 0x1FFF_FFFF) 不可缓存
-    // CLINT 区域 (0x0200_0000 - 0x02FF_FFFF) 不可缓存
-    // RAM 区域 (0x0000_0000 - 0x0FFF_FFFF) 可缓存
-    wire is_mmio_region = ((mem_physical_address >= 32'h10000000) && (mem_physical_address < 32'h20000000)) ||
-                          ((mem_physical_address >= 32'h02000000) && (mem_physical_address < 32'h03000000));
-    wire dcache_mem_cacheable = !is_mmio_region;
+    // RAM requests use a single-outstanding AXI bridge.  Keeping the request
+    // asserted until the AXI response avoids the DCache FIFO/ack deadlock.
+    wire dcache_request_active = (MEM_memory_read || MEM_memory_write) && !mmio_uart_status_hit;
+    reg data_response_pending;
+    reg [XLEN-1:0] data_response_q;
+    wire data_axi_request = dcache_request_active && !data_response_pending;
+    wire dcache_mem_rd = data_axi_request && MEM_memory_read;
+    wire [3:0] dcache_mem_wr = (data_axi_request && MEM_memory_write) ? write_mask : 4'b0000;
     
     // Pipeline 需要的 mem_valid：用于告诉 HazardUnit 目前是否处于访存状态
     assign mem_valid = (MEM_memory_write || MEM_memory_read);
 
-    wire dcache_mem_ack;
-    wire dcache_mem_accept;
+    wire axi_data_ready;
+    wire [XLEN-1:0] axi_data_read_data;
+    wire dcache_mem_ack = data_response_pending || axi_data_ready;
+
+    always @(posedge clk or posedge reset) begin
+        if (reset) begin
+            data_response_pending <= 1'b0;
+            data_response_q <= {XLEN{1'b0}};
+        end else begin
+            if (axi_data_ready) begin
+                data_response_q <= axi_data_read_data;
+                data_response_pending <= EX_MEM_stall;
+            end else if (data_response_pending && !EX_MEM_stall) begin
+                data_response_pending <= 1'b0;
+            end
+        end
+    end
+
+    assign data_memory_read_data = data_response_pending ? data_response_q : axi_data_read_data;
     
     // mem_ready 用于解除流水线停顿。
     // 如果是 MMIO 命中，由于采用了旁路逻辑（1个周期内直接出结果），无需等待，直接 ready = 1
     // 否则，等待 DCache 的 ack
     assign mem_ready = mmio_uart_status_hit ? 1'b1 : dcache_mem_ack;
 
-    dcache #(
-        .AXI_ID(1) // 与 ICache (ID=0) 区分
-    ) dcache_inst (
-        .clk_i(clk),
-        .rst_i(reset),
-        
-        // --- CPU 侧接口 ---
-        .mem_addr_i(mem_physical_address),
-        .mem_data_wr_i(data_memory_write_data),
-        .mem_rd_i(dcache_mem_rd),
-        .mem_wr_i(dcache_mem_wr),
-        .mem_cacheable_i(dcache_mem_cacheable),
-        .mem_req_tag_i(11'b0),
-        .mem_invalidate_i(1'b0),
-        .mem_writeback_i(1'b0),
-        .mem_flush_i(1'b0),
-        
-        .mem_data_rd_o(data_memory_read_data),
-        .mem_accept_o(dcache_mem_accept),
-        .mem_ack_o(dcache_mem_ack),
-        .mem_error_o(), // 暂不处理总线异常
-        .mem_resp_tag_o(),
-
-        // --- AXI4 侧接口 ---
-        .axi_awvalid_o(m_axi_mem_awvalid),
-        .axi_awready_i(m_axi_mem_awready),
-        .axi_awaddr_o(m_axi_mem_awaddr),
-        .axi_awid_o(m_axi_mem_awid),
-        .axi_awlen_o(m_axi_mem_awlen),
-        .axi_awburst_o(m_axi_mem_awburst),
-        .axi_wvalid_o(m_axi_mem_wvalid),
-        .axi_wready_i(m_axi_mem_wready),
-        .axi_wdata_o(m_axi_mem_wdata),
-        .axi_wstrb_o(m_axi_mem_wstrb),
-        .axi_wlast_o(m_axi_mem_wlast),
-        .axi_bvalid_i(m_axi_mem_bvalid),
-        .axi_bready_o(m_axi_mem_bready),
-        .axi_bresp_i(m_axi_mem_bresp),
-        .axi_bid_i(m_axi_mem_bid),
-        
-        .axi_arvalid_o(m_axi_mem_arvalid),
-        .axi_arready_i(m_axi_mem_arready),
-        .axi_araddr_o(m_axi_mem_araddr),
-        .axi_arid_o(m_axi_mem_arid),
-        .axi_arlen_o(m_axi_mem_arlen),
-        .axi_arburst_o(m_axi_mem_arburst),
-        .axi_rvalid_i(m_axi_mem_rvalid),
-        .axi_rready_o(m_axi_mem_rready),
-        .axi_rdata_i(m_axi_mem_rdata),
-        .axi_rresp_i(m_axi_mem_rresp),
-        .axi_rid_i(m_axi_mem_rid),
-        .axi_rlast_i(m_axi_mem_rlast)
+    RV32_AXI_Adapter data_axi_adapter (
+        .clk(clk),
+        .reset(reset),
+        .axi_awvalid(m_axi_mem_awvalid),
+        .axi_awready(m_axi_mem_awready),
+        .axi_awaddr(m_axi_mem_awaddr),
+        .axi_awprot(m_axi_mem_awprot),
+        .axi_wvalid(m_axi_mem_wvalid),
+        .axi_wready(m_axi_mem_wready),
+        .axi_wdata(m_axi_mem_wdata),
+        .axi_wstrb(m_axi_mem_wstrb),
+        .axi_bvalid(m_axi_mem_bvalid),
+        .axi_bready(m_axi_mem_bready),
+        .axi_arvalid(m_axi_mem_arvalid),
+        .axi_arready(m_axi_mem_arready),
+        .axi_araddr(m_axi_mem_araddr),
+        .axi_arprot(m_axi_mem_arprot),
+        .axi_rvalid(m_axi_mem_rvalid),
+        .axi_rready(m_axi_mem_rready),
+        .axi_rdata(m_axi_mem_rdata),
+        .mem_valid(data_axi_request),
+        .mem_instr(1'b0),
+        .mem_addr(mem_physical_address),
+        .mem_wdata(data_memory_write_data),
+        .mem_wstrb(dcache_mem_wr),
+        .mem_ready(axi_data_ready),
+        .mem_rdata(axi_data_read_data)
     );
 
-    // 补充 dcache 不输出的 AXI 保护类型信号（000: Unprivileged, secure, data access）
-    assign m_axi_mem_arprot = 3'b000;
-    assign m_axi_mem_awprot = 3'b000;
+    assign m_axi_mem_awid = 4'd1;
+    assign m_axi_mem_awlen = 8'd0;
+    assign m_axi_mem_awburst = 2'b01;
+    assign m_axi_mem_wlast = 1'b1;
+    assign m_axi_mem_arid = 4'd1;
+    assign m_axi_mem_arlen = 8'd0;
+    assign m_axi_mem_arburst = 2'b01;
 
     ExceptionDetector exception_detector (
         .clk(clk),
@@ -617,8 +647,8 @@ module RV32I46F5SPMMIO #(
         .timer_interrupt_pending(timer_interrupt_pending),
         .external_interrupt_pending(external_interrupt_pending),
 
-        .trapped(trapped),
-        .trap_status(trap_status)
+        .trapped(trapped_raw),
+        .trap_status(trap_status_raw)
     );
 
     ForwardUnit forward_unit (
@@ -668,15 +698,17 @@ module RV32I46F5SPMMIO #(
         
         // AXI Handshake connect
         .if_valid(if_valid),
-        .if_ready(if_ready),
+        .if_ready(if_pipeline_ready),
         .mem_valid(mem_valid),
         .mem_ready(mem_ready),
 
         .ID_rs1(rs1),
         .ID_rs2(rs2),
         .ID_raw_imm(raw_imm[11:0]),
+        .ID_opcode(opcode),
         .EX_csr_write_enable(EX_csr_write_enable),
         .MEM_rd(MEM_rd),
+        .MEM_opcode(MEM_opcode),
         .MEM_register_write_enable(MEM_register_write_enable),
         .MEM_csr_write_enable(MEM_csr_write_enable),
         .MEM_csr_write_address(MEM_raw_imm[11:0]),
@@ -689,8 +721,9 @@ module RV32I46F5SPMMIO #(
         .EX_rd(EX_rd),
         .EX_opcode(EX_opcode),
         .EX_imm(EX_raw_imm[11:0]),
-        .branch_prediction_miss(branch_prediction_miss),
-        .EX_jump(EX_jump),
+        .branch_prediction_miss(branch_miss_execute),
+        .EX_jump(EX_jump_execute),
+        .ID_jump(1'b0),
 
         .hazard_mem(hazard_mem),
         .hazard_wb(hazard_wb),
@@ -736,14 +769,15 @@ module RV32I46F5SPMMIO #(
         .rst_i(reset),
         
         // --- CPU 侧接口 ---
-        .req_rd_i(if_valid),
+        .req_rd_i(if_request_issue),
         .req_flush_i(1'b0),
         .req_invalidate_i(1'b0),
         .req_pc_i(if_physical_address), // 使用 next_pc 经过 MMU 映射后的地址
-        .req_accept_o(), // 暂不使用，CPU 会一直保持 valid 直到 ready
+        .req_accept_o(if_accept), // 暂不使用，CPU 会一直保持 valid 直到 ready
         .req_valid_o(if_ready),
         .req_error_o(), // 暂不处理取指错误异常
         .req_inst_o(im_instruction),
+        .req_pc_o(if_response_pc),
 
         // --- AXI4 侧接口 ---
         .axi_awvalid_o(m_axi_if_awvalid),
@@ -780,12 +814,24 @@ module RV32I46F5SPMMIO #(
     assign m_axi_if_arprot = 3'b100;
     assign m_axi_if_awprot = 3'b000;
 
+    reg mmio_write_pending;
+    wire mmio_write_fire = MEM_memory_write && mmio_uart_status_hit && !mmio_write_pending;
+
+    always @(posedge clk or posedge reset) begin
+        if (reset)
+            mmio_write_pending <= 1'b0;
+        else if (mmio_write_fire)
+            mmio_write_pending <= EX_MEM_stall;
+        else if (!MEM_memory_write || !mmio_uart_status_hit || !EX_MEM_stall)
+            mmio_write_pending <= 1'b0;
+    end
+
     MMIO_Interface mmio_interface (
         .clk(clk),
         .reset(reset),
         .data_memory_write_data(data_memory_write_data),
         .data_memory_address(mem_physical_address),
-        .data_memory_write_enable(MEM_memory_write),
+        .data_memory_write_enable(mmio_write_fire),
         .UART_busy(UART_busy),
 
         .mmio_uart_tx_data(mmio_uart_tx_data),
@@ -808,11 +854,11 @@ module RV32I46F5SPMMIO #(
     );
 
     PCController pc_controller (
-        .jump(EX_jump),
-        .ID_jump(ID_jump),              // ✅ 连接ID阶段跳转信号
+        .jump(EX_jump_execute),
+        .ID_jump(1'b0),
         .ID_jump_target(ID_jump_target), // ✅ 连接ID阶段跳转目标
         .branch_estimation(branch_estimation),
-        .branch_prediction_miss(branch_prediction_miss),
+        .branch_prediction_miss(branch_miss_execute),
         .trapped(trapped),
 	    .pc(pc),
         .jump_target(alu_result),
@@ -836,9 +882,12 @@ module RV32I46F5SPMMIO #(
         .read_data2(read_data2)
     );
 
-    TrapController #(.XLEN(XLEN))trap_controller (
+    TrapController #(
+        .XLEN(XLEN)
+    ) trap_controller(
         .clk(clk),
         .reset(reset),
+        .current_pc(pc),
         .trap_status(trap_status),
         .ID_pc(ID_pc),
         .EX_pc(EX_pc),
@@ -862,21 +911,16 @@ module RV32I46F5SPMMIO #(
         .csr_trap_write_data(csr_trap_write_data)
     );
 
-    reg IF_ID_flush_delay;
-    always @(posedge clk) begin
-        if (reset) IF_ID_flush_delay <= 1'b0;
-        else IF_ID_flush_delay <= IF_ID_flush;
-    end
 
     IF_ID_Register #(.XLEN(XLEN)) if_id_register (
         .clk(clk),
 		.reset(reset),
-        .flush(IF_ID_flush || IF_ID_flush_delay),
+        .flush(IF_ID_flush),
         .IF_ID_stall(IF_ID_stall),
 
         // Signals from IF Phase
-        .IF_pc(pc),
-        .IF_pc_plus_4(pc_plus_4_signal),
+        .IF_pc(if_response_pc),
+        .IF_pc_plus_4(if_response_pc + 32'd4),
         .IF_instruction(instruction),
         .IF_branch_estimation(branch_estimation),
 
@@ -1088,7 +1132,7 @@ module RV32I46F5SPMMIO #(
             alu_normal_source_b = 32'b0;
         end
 
-        if (!standby_mode && trapped) begin
+        if (!trap_done || trap_jump) begin
             csr_write_data  = csr_trap_write_data;
             csr_write_address = csr_trap_address;
             csr_read_address = csr_trap_address;
@@ -1097,6 +1141,7 @@ module RV32I46F5SPMMIO #(
             csr_write_data = WB_alu_result;
             csr_write_address = WB_raw_imm[11:0];
             csr_read_address = raw_imm[11:0];
+
         end
 
         if (debug_mode) instruction = dbg_instruction;

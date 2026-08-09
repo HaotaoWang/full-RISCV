@@ -14,6 +14,10 @@ module FPGA_Top (
     input  wire       sys_clk,     // 板载系统时钟 (需要查原理图确认频率)
     input  wire       sys_rst_n,   // 板载复位按键 (active low, 按下=0)
 
+    // UART 物理端口
+    input  wire       uart_rx,     // UART 接收 (从 PC 到 FPGA)
+    output wire       uart_tx,     // UART 发送 (从 FPGA 到 PC)
+
     output wire [3:0] led          // 板载 LED x4 (active high)
 );
 
@@ -53,22 +57,104 @@ module FPGA_Top (
     end
 
     // =====================================================================
+    //  UART 发送器 (115200 波特率)
+    // =====================================================================
+
+    wire [7:0]  mmio_uart_tx_data;
+    wire        mmio_uart_tx_start;
+    wire        uart_busy;
+
+    // UART 发送状态机
+    // 波特率: 115200, CPU时钟: 50MHz (100MHz / 2)
+    // 时钟分频系数 = 50,000,000 / 115200 ≈ 434
+
+    reg [8:0]  uart_bit_counter;
+    reg [3:0]  uart_state;
+    reg [7:0]  uart_shift_reg;
+    reg        uart_tx_reg;
+    reg [15:0] uart_baud_counter;
+
+    localparam UART_IDLE  = 4'd0;
+    localparam UART_START = 4'd1;
+    localparam UART_DATA  = 4'd2;
+    localparam UART_STOP  = 4'd3;
+
+    localparam BAUD_DIV = 16'd434;  // 50MHz / 115200
+
+    always @(posedge cpu_clk or posedge cpu_rst) begin
+        if (cpu_rst) begin
+            uart_state <= UART_IDLE;
+            uart_tx_reg <= 1'b1;
+            uart_baud_counter <= 16'd0;
+            uart_bit_counter <= 9'd0;
+            uart_shift_reg <= 8'd0;
+        end else begin
+            case (uart_state)
+                UART_IDLE: begin
+                    uart_tx_reg <= 1'b1;
+                    if (mmio_uart_tx_start) begin
+                        uart_shift_reg <= mmio_uart_tx_data;
+                        uart_state <= UART_START;
+                        uart_baud_counter <= 16'd0;
+                    end
+                end
+
+                UART_START: begin
+                    uart_tx_reg <= 1'b0;  // 起始位
+                    if (uart_baud_counter >= BAUD_DIV - 1) begin
+                        uart_baud_counter <= 16'd0;
+                        uart_state <= UART_DATA;
+                        uart_bit_counter <= 9'd0;
+                    end else begin
+                        uart_baud_counter <= uart_baud_counter + 1;
+                    end
+                end
+
+                UART_DATA: begin
+                    uart_tx_reg <= uart_shift_reg[0];
+                    if (uart_baud_counter >= BAUD_DIV - 1) begin
+                        uart_baud_counter <= 16'd0;
+                        uart_shift_reg <= {1'b0, uart_shift_reg[7:1]};
+                        if (uart_bit_counter >= 7) begin
+                            uart_state <= UART_STOP;
+                        end else begin
+                            uart_bit_counter <= uart_bit_counter + 1;
+                        end
+                    end else begin
+                        uart_baud_counter <= uart_baud_counter + 1;
+                    end
+                end
+
+                UART_STOP: begin
+                    uart_tx_reg <= 1'b1;  // 停止位
+                    if (uart_baud_counter >= BAUD_DIV - 1) begin
+                        uart_state <= UART_IDLE;
+                    end else begin
+                        uart_baud_counter <= uart_baud_counter + 1;
+                    end
+                end
+
+                default: uart_state <= UART_IDLE;
+            endcase
+        end
+    end
+
+    assign uart_tx = uart_tx_reg;
+    assign uart_busy = (uart_state != UART_IDLE);
+
+    // =====================================================================
     //  SoC 核心实例化
     // =====================================================================
 
     wire [31:0] retire_instruction;
-    wire [7:0]  mmio_uart_tx_data;
-    wire        mmio_uart_tx_start;
-    wire [3:0]  mmio_led;
-
-    RV32_SoC_AXI_Top_FPGA #(
+    // CPU SoC Instantiation
+    RV32_SoC_AXI_Top #(
         .RAM_ADDR_WIDTH(16),
-        .INIT_FILE("mmu_test.hex")
-        //.INIT_FILE("smode_test.hex")
+        .INIT_FILE("rtthread.hex")
     ) soc_inst (
         .clk(cpu_clk),
         .rst(cpu_rst),
-        .UART_busy(1'b0),
+        .UART_busy(uart_busy),
         .retire_instruction(retire_instruction),
         .mmio_uart_tx_data(mmio_uart_tx_data),
         .mmio_uart_tx_start(mmio_uart_tx_start),

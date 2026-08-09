@@ -26,9 +26,6 @@ _start:
     bltu t0, t1, 1b
 2:
 
-    /* Enable global interrupts (mstatus.MIE) */
-    li t0, 0x8
-    csrs mstatus, t0
 
     /* Call RT-Thread entry */
     call entry
@@ -58,14 +55,10 @@ trap_entry:
     /* Save ra at sp[1] */
     sw x1, 1 * 4(sp)
 
-    /* Save mstatus at sp[2] - extract MIE bit and convert to MPIE format
-     * RT-Thread expects: if MIE was set, store 0x80 (MPIE=1), else 0x00
-     */
+    /* Hardware copies MIE to MPIE and clears MIE on trap entry.
+     * Preserve MPIE so mret restores the interrupted state. */
     csrr t0, mstatus
-    andi t0, t0, 0x8         /* Extract MIE bit (bit 3) */
-    beqz t0, 1f
-    li t0, 0x80              /* If MIE=1, set MPIE=1 (bit 7) */
-1:
+    andi t0, t0, 0x80
     sw t0, 2 * 4(sp)
 
     /* Save gp-t6 (x3-x31), skip x2(sp) as it's managed by RT-Thread */
