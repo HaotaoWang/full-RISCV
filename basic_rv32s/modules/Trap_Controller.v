@@ -57,12 +57,14 @@ reg [3:0] trap_handle_state, next_trap_handle_state;
 reg [3:0] active_trap_status;
 reg [XLEN-1:0] active_trap_pc;
 reg debug_mode_reg; 
+reg trap_armed;
 
 // A trap request is a level that may disappear while the pre-trap FSM is
 // running (most notably after UPDATE_MODE clears mstatus.MIE).  Keep the cause
 // and resume PC stable until the complete CSR-write/redirect sequence ends.
 wire [3:0] handled_trap_status = (trap_handle_state == IDLE) ?
-                                 trap_status : active_trap_status;
+                                 (trap_armed ? trap_status : `TRAP_NONE) :
+                                 active_trap_status;
 // ECALL is detected in ID, and asynchronous interrupts use the boundary
 // after the older EX instruction.  In both cases ID_pc is the first
 // uncommitted instruction.  MEM/EX exceptions keep their stage-specific
@@ -102,6 +104,7 @@ always @(posedge clk or posedge reset) begin
         active_trap_status <= `TRAP_NONE;
         active_trap_pc <= {XLEN{1'b0}};
         debug_mode_reg <= 1'b0; 
+        trap_armed <= 1'b1;
     end else begin
         trap_handle_state <= next_trap_handle_state;
         if ((trap_handle_state == IDLE) && (trap_status != `TRAP_NONE)) begin
@@ -110,6 +113,15 @@ always @(posedge clk or posedge reset) begin
         end else if ((trap_handle_state != IDLE) && (next_trap_handle_state == IDLE)) begin
             active_trap_status <= `TRAP_NONE;
         end
+        // ExceptionDetector registers its output, so the just-completed trap
+        // remains visible for one clock after the pipeline flush.  Do not
+        // accept that stale level as a second trap (especially a second
+        // mret, which would pop mstatus twice).  Rearm only after the source
+        // has actually returned to NONE.
+        if ((trap_handle_state != IDLE) && (next_trap_handle_state == IDLE))
+            trap_armed <= 1'b0;
+        else if ((trap_handle_state == IDLE) && (trap_status == `TRAP_NONE))
+            trap_armed <= 1'b1;
         // debug_mode logics
         case (handled_trap_status)
             `TRAP_MRET: begin

@@ -23,12 +23,26 @@ SECTIONS
   } > RAM
 
 
-  .data : {
+  /*
+   * BRAM contents are restored from the bitstream only by FPGA
+   * reconfiguration, not by the board reset button.  Keep the initial .data
+   * bytes in an immutable load image below 0x4000 and run .data from 0x4000.
+   * startup.S copies the load image back on every reset.
+   */
+  __data_load_start = ALIGN(LOADADDR(.rti_fn) + SIZEOF(.rti_fn), 4);
+
+  .data 0x00004000 : AT(__data_load_start) {
     . = ALIGN(4);
+    __data_start = .;
     PROVIDE( __global_pointer$ = . + 0x800 );
     *(.data .data.*)
     *(.sdata .sdata.*)
+    . = ALIGN(4);
+    __data_end = .;
   } > RAM
+
+  __data_load_end = __data_load_start + SIZEOF(.data);
+  ASSERT(__data_load_end <= ADDR(.data), ".data load image overlaps runtime .data")
 
   .bss : {
     . = ALIGN(4);

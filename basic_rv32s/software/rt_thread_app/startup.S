@@ -16,15 +16,34 @@ _start:
     la t0, trap_entry
     csrw mtvec, t0
 
+    /* Restore initialized data on every reset.  FPGA BRAM initialization is
+     * applied only by Program Device; the physical reset button leaves RAM
+     * contents untouched, so RT-Thread's mutated object lists must be copied
+     * back from their linker-created load image before C code runs. */
+    .option push
+    .option norelax
+    la t0, __data_load_start
+    la t1, __data_start
+    la t2, __data_end
+    .option pop
+    beq t1, t2, 2f
+1:
+    lw t3, 0(t0)
+    sw t3, 0(t1)
+    addi t0, t0, 4
+    addi t1, t1, 4
+    bltu t1, t2, 1b
+2:
+
     /* Clear BSS */
     la t0, __bss_start
     la t1, __bss_end
-    beq t0, t1, 2f
-1:
+    beq t0, t1, 4f
+3:
     sw zero, 0(t0)
     addi t0, t0, 4
-    bltu t0, t1, 1b
-2:
+    bltu t0, t1, 3b
+4:
 
 
     /* Call RT-Thread entry */
@@ -92,18 +111,11 @@ trap_entry:
     sw x30, 30 * 4(sp)
     sw x31, 31 * 4(sp)
 
-    /* Tell RT-Thread that scheduling is running from interrupt context.
-     * This makes rt_schedule() defer the actual context switch until the
-     * complete trap frame has been saved and the handler is ready to exit. */
-    call rt_interrupt_enter
-
     /* Call C trap handler */
     csrr a0, mcause
     csrr a1, mepc
     mv a2, sp
     call system_trap_handler
-
-    call rt_interrupt_leave
 
     /* Check if context switch is needed */
     la s0, rt_thread_switch_interrupt_flag

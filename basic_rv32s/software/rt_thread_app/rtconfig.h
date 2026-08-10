@@ -10,6 +10,10 @@
 #define RT_USING_USER_MAIN
 #define RT_MAIN_THREAD_STACK_SIZE 1024
 #define RT_MAIN_THREAD_PRIORITY 10
+/* The machine trap frame alone is 128 bytes.  Timer handling and scheduling
+   execute on the interrupted thread's stack, so the default 128-byte idle
+   stack is guaranteed to overflow on the first tick received while idle. */
+#define IDLE_THREAD_STACK_SIZE 1024
 
 /* Kernel Device Object */
 #define RT_USING_DEVICE

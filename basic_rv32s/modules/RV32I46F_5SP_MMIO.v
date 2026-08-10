@@ -144,7 +144,14 @@ module RV32I46F5SPMMIO #(
     wire EX_jump_execute = EX_jump && (!mem_valid || mem_ready);
     wire branch_miss_execute = branch_prediction_miss && (!mem_valid || mem_ready);
     wire control_redirect = trap_jump || (trap_done && (EX_jump_execute || branch_miss_execute));
-    wire if_pipeline_ready = if_ready && !if_discard_response && !control_redirect;
+    // The I-cache can finish an older sequential request after a branch or
+    // trap has already changed PC.  A VALID response is usable only when its
+    // tagged request PC still matches the architectural fetch PC; otherwise
+    // discard it and retry the current PC.  Without this check an epilogue
+    // instruction from before an interrupt can be replayed after mret.
+    wire if_response_matches_pc = (if_response_pc == pc);
+    wire if_pipeline_ready = if_ready && if_response_matches_pc &&
+                             !if_discard_response && !control_redirect;
     wire mem_ready;
 
     // Serialize instruction fetches so redirects cannot leave stale responses
@@ -194,6 +201,13 @@ module RV32I46F5SPMMIO #(
 	wire register_file_write;
 	wire [2:0] register_file_write_data_select;
     wire cu_csr_write_enable;
+    // CSRRS/CSRRC (and their immediate forms) are read-only when the rs1/uimm
+    // field is zero.  In particular, the common `csrr rd, csr` pseudo-op must
+    // not write a stale ALU value back into mepc/mcause.
+    wire id_csr_write_enable = cu_csr_write_enable &&
+        ((funct3 == 3'b001) || (funct3 == 3'b101) ||
+         (((funct3 == 3'b010) || (funct3 == 3'b011) ||
+           (funct3 == 3'b110) || (funct3 == 3'b111)) && (rs1 != 5'b0)));
 
     // ID阶段跳转信号
     wire ID_jump = jump;  // ID阶段的跳转信号
@@ -249,7 +263,16 @@ module RV32I46F5SPMMIO #(
     // in the current cycle is sufficient, but an unfinished transaction is
     // allowed to drain before mret/ecall/interrupt handling starts.
     wire trap_mem_complete = !mem_valid || mem_ready;
-    wire trapped = trapped_raw && trap_mem_complete;
+    // An asynchronous interrupt must also not overtake an older taken branch
+    // or jump in EX.  If it did, the controller would save sequential ID_pc
+    // as mepc while the older redirect was suppressed, resuming on the wrong
+    // path after mret.  Leave the interrupt pending for one more cycle so the
+    // control transfer retires first.
+    wire raw_async_interrupt = (trap_status_raw == `TRAP_TIMER_INTERRUPT) ||
+                               (trap_status_raw == `TRAP_EXTERNAL_INTERRUPT);
+    wire older_ex_redirect = EX_jump || branch_prediction_miss;
+    wire trap_control_complete = !raw_async_interrupt || !older_ex_redirect;
+    wire trapped = trapped_raw && trap_mem_complete && trap_control_complete;
     wire [3:0] trap_status = trapped ? trap_status_raw : `TRAP_NONE;
 
     // Trap Controller
@@ -390,8 +413,13 @@ module RV32I46F5SPMMIO #(
     wire [31:0] writeback_instruction = WB_instruction;
     assign retire_instruction = writeback_instruction;
 
-    wire csr_write_enable_source;
-    assign csr_write_enable_source = tc_csr_write_enable ? tc_csr_write_enable : WB_csr_write_enable;
+    /* Keep all three CSR write-port signals under the same owner.  During the
+       trap redirect cycles an older WB CSR instruction may still be visible;
+       combining that WB write-enable with the trap controller's address/data
+       corrupts the selected trap CSR (notably writing zero to mtvec). */
+    wire trap_controller_owns_csr = !trap_done || trap_jump;
+    wire csr_write_enable_source = trap_controller_owns_csr ?
+                                   tc_csr_write_enable : WB_csr_write_enable;
 
     wire [XLEN-1:0] data_memory_read_data_muxed;
     assign data_memory_read_data_muxed = mmio_uart_status_hit ? mmio_uart_status : data_memory_read_data;
@@ -581,7 +609,8 @@ module RV32I46F5SPMMIO #(
             if (axi_data_ready) begin
                 data_response_q <= axi_data_read_data;
                 data_response_pending <= 1'b1;
-            end else if (data_response_pending) begin
+            end else if (data_response_pending &&
+                         (!dcache_request_active || !EX_MEM_stall)) begin
                 data_response_pending <= 1'b0;
             end
         end
@@ -957,7 +986,7 @@ module RV32I46F5SPMMIO #(
         .ID_memory_write(memory_write),
         .ID_register_file_write_data_select(register_file_write_data_select),
         .ID_register_write_enable(register_file_write),
-        .ID_csr_write_enable(cu_csr_write_enable),
+        .ID_csr_write_enable(id_csr_write_enable),
         .ID_opcode(opcode), 
         .ID_funct3(funct3),
         .ID_funct7(funct7),
@@ -1137,7 +1166,7 @@ module RV32I46F5SPMMIO #(
             alu_normal_source_b = 32'b0;
         end
 
-        if (!trap_done || trap_jump) begin
+        if (trap_controller_owns_csr) begin
             csr_write_data  = csr_trap_write_data;
             csr_write_address = csr_trap_address;
             csr_read_address = csr_trap_address;

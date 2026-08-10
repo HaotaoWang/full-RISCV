@@ -80,6 +80,13 @@ void system_trap_handler(rt_ubase_t mcause, rt_ubase_t mepc, rt_ubase_t sp)
     /* mcause bit 31 indicates interrupt */
     if (mcause & 0x80000000) {
         rt_ubase_t exception_code = mcause & 0x7FFFFFFF;
+
+        /* Keep RT-Thread's interrupt nesting state scoped to the C handler.
+           In particular, do not let a tail call from this handler bypass
+           rt_interrupt_leave(), otherwise later thread-level scheduling is
+           incorrectly deferred as if it were still running in an ISR. */
+        rt_interrupt_enter();
+
         if (exception_code == 7) { /* Machine Timer Interrupt */
             uint64_t now = clint_mtime_read();
             do {
@@ -88,6 +95,8 @@ void system_trap_handler(rt_ubase_t mcause, rt_ubase_t mepc, rt_ubase_t sp)
             clint_mtimecmp_write(next_tick);
             rt_tick_increase();
         }
+
+        rt_interrupt_leave();
     } else {
         /* Keep enough context to distinguish a bad JALR target from stack
            corruption.  sp points at the frame built by trap_entry and ra is
