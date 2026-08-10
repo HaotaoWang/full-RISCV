@@ -92,11 +92,18 @@ trap_entry:
     sw x30, 30 * 4(sp)
     sw x31, 31 * 4(sp)
 
+    /* Tell RT-Thread that scheduling is running from interrupt context.
+     * This makes rt_schedule() defer the actual context switch until the
+     * complete trap frame has been saved and the handler is ready to exit. */
+    call rt_interrupt_enter
+
     /* Call C trap handler */
     csrr a0, mcause
     csrr a1, mepc
     mv a2, sp
     call system_trap_handler
+
+    call rt_interrupt_leave
 
     /* Check if context switch is needed */
     la s0, rt_thread_switch_interrupt_flag

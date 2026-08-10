@@ -89,8 +89,23 @@ void system_trap_handler(rt_ubase_t mcause, rt_ubase_t mepc, rt_ubase_t sp)
             rt_tick_increase();
         }
     } else {
-        /* Exception (e.g., ecall, illegal instruction, etc.) */
-        rt_kprintf("Exception! mcause: 0x%08x, mepc: 0x%08x\n", mcause, mepc);
+        /* Keep enough context to distinguish a bad JALR target from stack
+           corruption.  sp points at the frame built by trap_entry and ra is
+           stored in word 1 of that frame. */
+        rt_ubase_t mtval;
+        rt_ubase_t mstatus;
+        rt_ubase_t saved_ra = ((rt_ubase_t *)sp)[1];
+        rt_ubase_t interrupted_sp = sp + 32 * sizeof(rt_ubase_t);
+
+        __asm__ volatile("csrr %0, mtval" : "=r"(mtval));
+        __asm__ volatile("csrr %0, mstatus" : "=r"(mstatus));
+
+        rt_kprintf("Exception! mcause: 0x%08x, mepc: 0x%08x\n",
+                   mcause, mepc);
+        rt_kprintf("           mtval: 0x%08x, mstatus: 0x%08x\n",
+                   mtval, mstatus);
+        rt_kprintf("           ra: 0x%08x, sp: 0x%08x, frame: 0x%08x\n",
+                   saved_ra, interrupted_sp, sp);
         while(1);
     }
 }

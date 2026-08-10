@@ -142,8 +142,11 @@ module HazardUnit (
         // 1. Stall Logic
         // ==========================================
         if (standby_mode) begin
+            // Freeze fetch/decode and replace the trapped ID instruction with
+            // a bubble while older EX/MEM/WB work drains exactly once.  This
+            // is essential for the addi sp,sp,128 immediately before mret.
             IF_ID_stall = 1'b1;
-            ID_EX_stall = 1'b1;
+            ID_EX_flush = 1'b1;
             EX_MEM_stall = 1'b0;
             MEM_WB_stall = 1'b0;
         end else if (!trap_done || !csr_ready) begin

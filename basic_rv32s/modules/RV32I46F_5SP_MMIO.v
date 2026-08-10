@@ -566,7 +566,12 @@ module RV32I46F5SPMMIO #(
 
     wire axi_data_ready;
     wire [XLEN-1:0] axi_data_read_data;
-    wire dcache_mem_ack = data_response_pending || axi_data_ready;
+    // AXI read data and ready are combinational outputs of the bridge.  Do
+    // not let them directly release the CPU pipeline: on FPGA that makes the
+    // RAM -> interconnect -> bridge -> MEM/WB path a same-cycle dependency.
+    // Capture every response first and acknowledge it to MEM on the following
+    // cycle, when both the data and the completion flag are registered.
+    wire dcache_mem_ack = data_response_pending;
 
     always @(posedge clk or posedge reset) begin
         if (reset) begin
@@ -575,14 +580,14 @@ module RV32I46F5SPMMIO #(
         end else begin
             if (axi_data_ready) begin
                 data_response_q <= axi_data_read_data;
-                data_response_pending <= EX_MEM_stall;
-            end else if (data_response_pending && !EX_MEM_stall) begin
+                data_response_pending <= 1'b1;
+            end else if (data_response_pending) begin
                 data_response_pending <= 1'b0;
             end
         end
     end
 
-    assign data_memory_read_data = data_response_pending ? data_response_q : axi_data_read_data;
+    assign data_memory_read_data = data_response_q;
     
     // mem_ready 用于解除流水线停顿。
     // 如果是 MMIO 命中，由于采用了旁路逻辑（1个周期内直接出结果），无需等待，直接 ready = 1

@@ -53,6 +53,31 @@ module RV32_SoC_AXI_tb;
     integer instr_count = 0;
     integer jal_count = 0;
     integer jalr_count = 0;
+    integer uart_busy_cycles = 0;
+    integer uart_busy_count = 0;
+    integer simulation_time_ns = 2000000;
+    integer misaligned_trace_count = 0;
+
+    // Optional realistic UART back-pressure.  The original testbench kept
+    // UART_busy low permanently, so console output completed before the
+    // timer could interrupt most printf paths.  Use +UART_BUSY_CYCLES=4340
+    // to model a complete 115200-baud character at a 50 MHz CPU clock.
+    always @(posedge clk) begin
+        if (rst) begin
+            UART_busy <= 1'b0;
+            uart_busy_count <= 0;
+        end else if (UART_busy) begin
+            if (uart_busy_count <= 1) begin
+                UART_busy <= 1'b0;
+                uart_busy_count <= 0;
+            end else begin
+                uart_busy_count <= uart_busy_count - 1;
+            end
+        end else if (mmio_uart_tx_start && uart_busy_cycles > 0) begin
+            UART_busy <= 1'b1;
+            uart_busy_count <= uart_busy_cycles;
+        end
+    end
 
 
     always @(posedge clk) begin
@@ -109,6 +134,112 @@ module RV32_SoC_AXI_tb;
                     soc.cpu_core.csr_file.mcause,
                     soc.cpu_core.csr_file.mtval);
 
+                if (soc.cpu_core.trap_status == 4'b1001 &&
+                    soc.cpu_core.trap_controller.trap_handle_state == 4'b0000) begin
+                    $display("[%0t] TIMER_ACCEPT pc=%08x sp=%08x ID=%08x/%08x EX=%08x/%08x MEM=%08x/%08x WB=%08x/%08x",
+                        $time, soc.cpu_core.pc,
+                        soc.cpu_core.register_file.registers[2],
+                        soc.cpu_core.ID_pc, soc.cpu_core.ID_instruction,
+                        soc.cpu_core.EX_pc, soc.cpu_core.EX_instruction,
+                        soc.cpu_core.MEM_pc, soc.cpu_core.MEM_instruction,
+                        soc.cpu_core.WB_pc, soc.cpu_core.WB_instruction);
+                    $display("  active_pc=%08x next_pc=%08x stalls=%b%b%b%b flush=%b%b%b%b",
+                        soc.cpu_core.trap_controller.incoming_trap_pc,
+                        soc.cpu_core.next_pc,
+                        soc.cpu_core.IF_ID_stall, soc.cpu_core.ID_EX_stall,
+                        soc.cpu_core.EX_MEM_stall, soc.cpu_core.MEM_WB_stall,
+                        soc.cpu_core.IF_ID_flush, soc.cpu_core.ID_EX_flush,
+                        soc.cpu_core.EX_MEM_flush, soc.cpu_core.MEM_WB_flush);
+                end
+
+            end
+
+            // Capture the first raw instruction-misalignment events before
+            // the multi-cycle trap controller changes the visible pipeline.
+            if (soc.cpu_core.trap_status_raw == 4'b0011 &&
+                misaligned_trace_count < 12) begin
+                misaligned_trace_count = misaligned_trace_count + 1;
+                $display("[%0t] MISALIGN_RAW #%0d src(ID/EX/MEM)=%b/%b/%b",
+                    $time, misaligned_trace_count,
+                    soc.cpu_core.exception_detector.ID_trapped,
+                    soc.cpu_core.exception_detector.EX_trapped,
+                    soc.cpu_core.exception_detector.MEM_trapped);
+                $display("  PC=%08x ID=%08x/%08x EX=%08x/%08x MEM=%08x/%08x WB=%08x/%08x",
+                    soc.cpu_core.pc,
+                    soc.cpu_core.ID_pc, soc.cpu_core.ID_instruction,
+                    soc.cpu_core.EX_pc, soc.cpu_core.EX_instruction,
+                    soc.cpu_core.MEM_pc, soc.cpu_core.MEM_instruction,
+                    soc.cpu_core.WB_pc, soc.cpu_core.WB_instruction);
+                $display("  alu=%08x mem_alu=%08x x1=%08x x2=%08x next_pc=%08x",
+                    soc.cpu_core.alu_result, soc.cpu_core.MEM_alu_result,
+                    soc.cpu_core.register_file.registers[1],
+                    soc.cpu_core.register_file.registers[2],
+                    soc.cpu_core.next_pc);
+                $display("  stack[29a4]=%08x load_data=%08x wb_data=%08x",
+                    soc.main_memory.mem[32'h000029a4 >> 2],
+                    soc.cpu_core.data_memory_read_data,
+                    soc.cpu_core.register_file_write_data);
+                $display("  stall(IF/ID/EX/MEM/WB)=%b/%b/%b/%b/%b mem=%b/%b trap=%b/%x",
+                    soc.cpu_core.pc_stall, soc.cpu_core.IF_ID_stall,
+                    soc.cpu_core.ID_EX_stall, soc.cpu_core.EX_MEM_stall,
+                    soc.cpu_core.MEM_WB_stall, soc.cpu_core.mem_valid,
+                    soc.cpu_core.mem_ready, soc.cpu_core.trapped_raw,
+                    soc.cpu_core.trap_status_raw);
+            end
+
+            if ((soc.cpu_core.MEM_alu_result == 32'h000029a4) &&
+                (soc.cpu_core.MEM_memory_read || soc.cpu_core.MEM_memory_write)) begin
+                $display("[%0t] STACK_RA_ACCESS pc=%08x instr=%08x rd=%b wr=%b wdata=%08x rdata=%08x ready=%b memword=%08x",
+                    $time, soc.cpu_core.MEM_pc, soc.cpu_core.MEM_instruction,
+                    soc.cpu_core.MEM_memory_read, soc.cpu_core.MEM_memory_write,
+                    soc.cpu_core.data_memory_write_data,
+                    soc.cpu_core.data_memory_read_data, soc.cpu_core.mem_ready,
+                    soc.main_memory.mem[32'h000029a4 >> 2]);
+            end
+
+            if ((soc.cpu_core.MEM_pc == 32'h00001164 ||
+                 soc.cpu_core.MEM_pc == 32'h00001174) &&
+                soc.cpu_core.MEM_memory_read) begin
+                $display("[%0t] OBJECT_LOAD pc=%08x addr=%08x rdata=%08x ready=%b pending=%b s0=%08x s3=%08x a5=%08x sp=%08x",
+                    $time, soc.cpu_core.MEM_pc, soc.cpu_core.MEM_alu_result,
+                    soc.cpu_core.data_memory_read_data, soc.cpu_core.mem_ready,
+                    soc.cpu_core.data_response_pending,
+                    soc.cpu_core.register_file.registers[8],
+                    soc.cpu_core.register_file.registers[19],
+                    soc.cpu_core.register_file.registers[15],
+                    soc.cpu_core.register_file.registers[2]);
+            end
+
+            if (soc.cpu_core.WB_register_write_enable && soc.cpu_core.WB_rd == 5'd1) begin
+                $display("[%0t] X1_WRITE wb_pc=%08x instr=%08x data=%08x stall=%b flush=%b",
+                    $time, soc.cpu_core.WB_pc, soc.cpu_core.WB_instruction,
+                    soc.cpu_core.register_file_write_data,
+                    soc.cpu_core.MEM_WB_stall, soc.cpu_core.MEM_WB_flush);
+            end
+
+            // Track the rt_kprintf prologue store that must replace the old
+            // contents of 0x29a4 with the caller's return address.
+            if (soc.cpu_core.ID_pc == 32'h00000f8c ||
+                soc.cpu_core.EX_pc == 32'h00000f8c ||
+                soc.cpu_core.MEM_pc == 32'h00000f8c ||
+                soc.cpu_core.WB_pc == 32'h00000f8c) begin
+                $display("[%0t] KPRINTF_SAVE ID=%08x/%08x EX=%08x/%08x MEM=%08x/%08x WB=%08x/%08x",
+                    $time,
+                    soc.cpu_core.ID_pc, soc.cpu_core.ID_instruction,
+                    soc.cpu_core.EX_pc, soc.cpu_core.EX_instruction,
+                    soc.cpu_core.MEM_pc, soc.cpu_core.MEM_instruction,
+                    soc.cpu_core.WB_pc, soc.cpu_core.WB_instruction);
+                $display("  sp=%08x x1=%08x ex_alu=%08x mem_alu=%08x wr=%b wdata=%08x valid/ready=%b/%b stalls=%b%b%b flush=%b%b%b",
+                    soc.cpu_core.register_file.registers[2],
+                    soc.cpu_core.register_file.registers[1],
+                    soc.cpu_core.alu_result, soc.cpu_core.MEM_alu_result,
+                    soc.cpu_core.MEM_memory_write,
+                    soc.cpu_core.data_memory_write_data,
+                    soc.cpu_core.mem_valid, soc.cpu_core.mem_ready,
+                    soc.cpu_core.ID_EX_stall, soc.cpu_core.EX_MEM_stall,
+                    soc.cpu_core.MEM_WB_stall,
+                    soc.cpu_core.ID_EX_flush, soc.cpu_core.EX_MEM_flush,
+                    soc.cpu_core.MEM_WB_flush);
             end
         end
     end
@@ -123,6 +254,10 @@ module RV32_SoC_AXI_tb;
         // 初始化
         rst = 1;
         UART_busy = 0;
+        if (!$value$plusargs("UART_BUSY_CYCLES=%d", uart_busy_cycles))
+            uart_busy_cycles = 0;
+        if (!$value$plusargs("SIM_TIME_NS=%d", simulation_time_ns))
+            simulation_time_ns = 2000000;
 
         // 等待复位稳定
         #100;
@@ -150,7 +285,7 @@ module RV32_SoC_AXI_tb;
         rst = 0;
 
         // 快速验证测试 - 运行长一点时间以等待 RT-Thread 启动
-        #2000000;
+        #(simulation_time_ns);
 
         // 打印测试结果
         $display("\n========================================");

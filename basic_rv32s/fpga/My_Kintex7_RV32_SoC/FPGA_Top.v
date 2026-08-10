@@ -22,20 +22,42 @@ module FPGA_Top (
 );
 
     // =====================================================================
-    //  时钟分频 (简单二分频)
+    //  CPU clock: 100 MHz board clock -> 50 MHz global clock
     // =====================================================================
-    // 如果板载时钟是 200MHz, 分频后为 100MHz
-    // 如果板载时钟是 100MHz, 分频后为 50MHz
-    // 你可以根据实际需求调整分频比
-
-    reg clk_div = 1'b0;
-    always @(posedge sys_clk) begin
-        clk_div <= ~clk_div;
-    end
-
+    // Do not use a fabric flip-flop as a clock divider.  That clock was not
+    // recognized by static timing analysis, leaving the complete CPU/AXI/RAM
+    // domain unconstrained.  The MMCM produces a real generated clock that
+    // Vivado can analyze and the BUFG distributes it on the global network.
+    wire cpu_clk_mmcm;
     wire cpu_clk;
-    BUFG bufg_inst (
-        .I(clk_div),
+    wire clk_feedback_mmcm;
+    wire clk_feedback;
+    wire clock_locked;
+
+    MMCME2_BASE #(
+        .BANDWIDTH("OPTIMIZED"),
+        .CLKFBOUT_MULT_F(10.0),
+        .CLKIN1_PERIOD(10.0),
+        .CLKOUT0_DIVIDE_F(20.0),
+        .DIVCLK_DIVIDE(1),
+        .STARTUP_WAIT("FALSE")
+    ) cpu_clock_mmcm (
+        .CLKIN1(sys_clk),
+        .CLKFBIN(clk_feedback),
+        .RST(~sys_rst_n),
+        .PWRDWN(1'b0),
+        .CLKFBOUT(clk_feedback_mmcm),
+        .CLKOUT0(cpu_clk_mmcm),
+        .LOCKED(clock_locked)
+    );
+
+    BUFG cpu_clock_feedback_bufg (
+        .I(clk_feedback_mmcm),
+        .O(clk_feedback)
+    );
+
+    BUFG cpu_clock_output_bufg (
+        .I(cpu_clk_mmcm),
         .O(cpu_clk)
     );
 
@@ -49,8 +71,11 @@ module FPGA_Top (
     reg [3:0] rst_shift = 4'b0000;  // 上电后默认处于复位状态，等待时钟稳定及外部拉高
     wire cpu_rst = ~rst_shift[3];   // 取反：rst_shift=1111->cpu_rst=0(运行), rst_shift=0000->cpu_rst=1(复位)
 
-    always @(posedge cpu_clk) begin
-        rst_shift <= {rst_shift[2:0], sys_rst_n};
+    always @(posedge cpu_clk or negedge clock_locked) begin
+        if (!clock_locked)
+            rst_shift <= 4'b0000;
+        else
+            rst_shift <= {rst_shift[2:0], sys_rst_n};
         // sys_rst_n=1 (松开/PULLUP) -> 移入1 -> rst_shift全1 -> cpu_rst=0 (运行)
         // sys_rst_n=0 (按下KEY1)    -> 移入0 -> rst_shift全0 -> cpu_rst=1 (复位)
         // 上电后 rst_shift=0000 -> cpu_rst=1(短暂复位), PULLUP后sys_rst_n=1, 4个周期后cpu_rst=0(运行)

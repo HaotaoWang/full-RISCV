@@ -63,9 +63,17 @@ reg debug_mode_reg;
 // and resume PC stable until the complete CSR-write/redirect sequence ends.
 wire [3:0] handled_trap_status = (trap_handle_state == IDLE) ?
                                  trap_status : active_trap_status;
-wire [XLEN-1:0] incoming_trap_pc = (EX_pc != {XLEN{1'b0}}) ? EX_pc :
-                                      (ID_pc != {XLEN{1'b0}}) ? ID_pc :
-                                      current_pc;
+// ECALL is detected in ID, and asynchronous interrupts use the boundary
+// after the older EX instruction.  In both cases ID_pc is the first
+// uncommitted instruction.  MEM/EX exceptions keep their stage-specific
+// handling below.
+wire resume_from_id = (trap_status == `TRAP_ECALL) ||
+                      (trap_status == `TRAP_TIMER_INTERRUPT) ||
+                      (trap_status == `TRAP_EXTERNAL_INTERRUPT);
+wire [XLEN-1:0] incoming_trap_pc = resume_from_id ?
+                                    ((ID_pc != {XLEN{1'b0}}) ? ID_pc : current_pc) :
+                                    ((EX_pc != {XLEN{1'b0}}) ? EX_pc :
+                                     ((ID_pc != {XLEN{1'b0}}) ? ID_pc : current_pc));
 
 // Exception Cause Code Mapping
 reg [31:0] exception_cause;
@@ -158,9 +166,12 @@ always @(*) begin
             case (trap_handle_state)
                 IDLE: begin 
                     if (handled_trap_status == `TRAP_MRET) begin
-                        csr_trap_address = 12'h341; // mepc
+                        // Drain the older instructions before reading mepc.
+                        // In particular, rt_hw_context_switch_exit restores
+                        // sp in the instruction immediately preceding mret.
+                        standby_mode = 1'b1;
                         trap_done = 1'b0;
-                        next_trap_handle_state = READ_MEPC;
+                        next_trap_handle_state = MEM_STANDBY;
 
                     end else if (handled_trap_status == `TRAP_SRET) begin
                         csr_trap_address = 12'h141; // sepc
@@ -197,7 +208,10 @@ always @(*) begin
                 RTRE_STANDBY: begin
                     standby_mode = 1'b1;
                     trap_done = 1'b0;
-                    next_trap_handle_state = ECALL_EPC_WRITE;
+                    if (handled_trap_status == `TRAP_MRET)
+                        next_trap_handle_state = READ_MEPC;
+                    else
+                        next_trap_handle_state = ECALL_EPC_WRITE;
                 end
 
                 ECALL_EPC_WRITE: begin
