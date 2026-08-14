@@ -22,7 +22,7 @@ module FPGA_Top (
 );
 
     // =====================================================================
-    //  CPU clock: 100 MHz board clock -> 50 MHz global clock
+    //  CPU clock: 100 MHz board clock -> 10 MHz global clock
     // =====================================================================
     // Do not use a fabric flip-flop as a clock divider.  That clock was not
     // recognized by static timing analysis, leaving the complete CPU/AXI/RAM
@@ -38,7 +38,7 @@ module FPGA_Top (
         .BANDWIDTH("OPTIMIZED"),
         .CLKFBOUT_MULT_F(10.0),
         .CLKIN1_PERIOD(10.0),
-        .CLKOUT0_DIVIDE_F(20.0),
+        .CLKOUT0_DIVIDE_F(100.0),
         .DIVCLK_DIVIDE(1),
         .STARTUP_WAIT("FALSE")
     ) cpu_clock_mmcm (
@@ -71,14 +71,17 @@ module FPGA_Top (
     reg [3:0] rst_shift = 4'b0000;  // 上电后默认处于复位状态，等待时钟稳定及外部拉高
     wire cpu_rst = ~rst_shift[3];   // 取反：rst_shift=1111->cpu_rst=0(运行), rst_shift=0000->cpu_rst=1(复位)
 
-    always @(posedge cpu_clk or negedge clock_locked) begin
-        if (!clock_locked)
+    wire reset_async_n = sys_rst_n & clock_locked;
+
+    // Asynchronous assertion, synchronous release. KEY1/J13 directly asserts
+    // reset; release waits for four valid clocks after the MMCM is locked.
+    always @(posedge cpu_clk or negedge reset_async_n) begin
+        if (!reset_async_n)
             rst_shift <= 4'b0000;
         else
-            rst_shift <= {rst_shift[2:0], sys_rst_n};
-        // sys_rst_n=1 (松开/PULLUP) -> 移入1 -> rst_shift全1 -> cpu_rst=0 (运行)
-        // sys_rst_n=0 (按下KEY1)    -> 移入0 -> rst_shift全0 -> cpu_rst=1 (复位)
-        // 上电后 rst_shift=0000 -> cpu_rst=1(短暂复位), PULLUP后sys_rst_n=1, 4个周期后cpu_rst=0(运行)
+            rst_shift <= {rst_shift[2:0], 1'b1};
+        // KEY1 or loss of MMCM lock clears all stages asynchronously.
+        // After KEY1 release and clock lock, four ones shift in before run.
     end
 
     // =====================================================================
@@ -104,7 +107,7 @@ module FPGA_Top (
     localparam UART_DATA  = 4'd2;
     localparam UART_STOP  = 4'd3;
 
-    localparam BAUD_DIV = 16'd434;  // 50MHz / 115200
+    localparam BAUD_DIV = 16'd87;  // 10MHz / 115200
 
     always @(posedge cpu_clk or posedge cpu_rst) begin
         if (cpu_rst) begin
@@ -165,17 +168,21 @@ module FPGA_Top (
     end
 
     assign uart_tx = uart_tx_reg;
-    assign uart_busy = (uart_state != UART_IDLE);
+    // Include the registered start pulse so a following TX store cannot enter
+    // during the one-cycle gap before the state machine leaves IDLE.
+    assign uart_busy = (uart_state != UART_IDLE) || mmio_uart_tx_start;
 
     // =====================================================================
     //  SoC 核心实例化
     // =====================================================================
 
     wire [31:0] retire_instruction;
+    wire [3:0]  mmio_led;
     // CPU SoC Instantiation
     RV32_SoC_AXI_Top #(
         .RAM_ADDR_WIDTH(16),
-        .INIT_FILE("rtthread.hex")
+        //.INIT_FILE("dhrystone.hex")
+        .INIT_FILE("coremark.hex")
     ) soc_inst (
         .clk(cpu_clk),
         .rst(cpu_rst),
@@ -189,7 +196,11 @@ module FPGA_Top (
     // =====================================================================
     //  LED 输出
     // =====================================================================
-    assign led = mmio_led;
+    // Reset diagnostics: LED0=physical KEY1 press, LED1=internal CPU reset.
+    // LED2 and LED3 remain under software control.
+    assign led[0] = ~sys_rst_n;
+    assign led[1] = cpu_rst;
+    assign led[3:2] = mmio_led[3:2];
 
 endmodule
 

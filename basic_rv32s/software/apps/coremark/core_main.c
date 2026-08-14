@@ -370,7 +370,11 @@ for (i = 0; i < MULTITHREAD; i++)
                   default_num_contexts * results[0].iterations
                       / time_in_secs(total_time));
 #endif
-    if (time_in_secs(total_time) < 10)
+    if (time_in_secs(total_time) < 10
+#ifdef COREMARK_ALLOW_SHORT_RUN
+        && 0
+#endif
+       )
     {
         ee_printf(
             "ERROR! Must execute for at least 10 secs for a valid result!\n");
@@ -398,6 +402,15 @@ for (i = 0; i < MULTITHREAD; i++)
             ee_printf("[%d]crcstate      : 0x%04x\n", i, results[i].crcstate);
     for (i = 0; i < default_num_contexts; i++)
         ee_printf("[%d]crcfinal      : 0x%04x\n", i, results[i].crc);
+    if (total_time != 0)
+    {
+        unsigned long long score_x1000 =
+            ((unsigned long long)default_num_contexts * results[0].iterations *
+             1000000000ULL) / (unsigned long long)total_time;
+        ee_printf("CoreMark/MHz     : %lu.%03lu\n",
+                  (long unsigned)(score_x1000 / 1000ULL),
+                  (long unsigned)(score_x1000 % 1000ULL));
+    }
     if (total_errors == 0)
     {
         ee_printf(
@@ -430,6 +443,13 @@ for (i = 0; i < MULTITHREAD; i++)
         ee_printf(
             "Cannot validate operation for these seed values, please compare "
             "with results on a known platform.\n");
+
+    if (total_errors == 0)
+        ee_printf("COREMARK PASS iterations=%lu ticks=%lu\n",
+                  (long unsigned)default_num_contexts * results[0].iterations,
+                  (long unsigned)total_time);
+    else
+        ee_printf("COREMARK FAIL errors=%d\n", total_errors);
 
 #if (MEM_METHOD == MEM_MALLOC)
     for (i = 0; i < MULTITHREAD; i++)

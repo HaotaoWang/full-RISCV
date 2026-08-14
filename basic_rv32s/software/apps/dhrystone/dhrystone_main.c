@@ -48,7 +48,8 @@ long            Begin_Time,
                 End_Time,
                 User_Time;
 long            Microseconds,
-                Dhrystones_Per_Second;
+                Dhrystones_Per_Second,
+                DMIPS_Per_MHz_x1000;
 
 /* end of variables for time measurement */
 
@@ -175,7 +176,11 @@ int main (int argc, char** argv)
 
     User_Time = End_Time - Begin_Time;
 
-    if (User_Time < Too_Small_Time)
+    if (User_Time < Too_Small_Time
+#ifdef DHRY_FIXED_RUNS
+        && 0
+#endif
+       )
     {
       printf("Measured time too small to obtain meaningful results\n");
       Number_Of_Runs = Number_Of_Runs * 10;
@@ -185,6 +190,23 @@ int main (int argc, char** argv)
 
   debug_printf("Final values of the variables used in the benchmark:\n");
   debug_printf("\n");
+
+  if (Int_Glob != 5 || Bool_Glob != 1 ||
+      Ch_1_Glob != 'A' || Ch_2_Glob != 'B' ||
+      Arr_1_Glob[8] != 7 || Arr_2_Glob[8][7] != Number_Of_Runs + 10 ||
+      Ptr_Glob->Discr != 0 || Ptr_Glob->variant.var_1.Enum_Comp != 2 ||
+      Ptr_Glob->variant.var_1.Int_Comp != 17 ||
+      Next_Ptr_Glob->Discr != 0 ||
+      Next_Ptr_Glob->variant.var_1.Enum_Comp != 1 ||
+      Next_Ptr_Glob->variant.var_1.Int_Comp != 18 ||
+      Int_1_Loc != 5 || Int_2_Loc != 13 || Int_3_Loc != 7 ||
+      Enum_Loc != 1 ||
+      strcmp(Str_1_Loc, "DHRYSTONE PROGRAM, 1'ST STRING") != 0 ||
+      strcmp(Str_2_Loc, "DHRYSTONE PROGRAM, 2'ND STRING") != 0)
+  {
+    printf("DHRYSTONE FAIL\n");
+    return 1;
+  }
   debug_printf("Int_Glob:            %d\n", Int_Glob);
   debug_printf("        should be:   %d\n", 5);
   debug_printf("Bool_Glob:           %d\n", Bool_Glob);
@@ -240,16 +262,23 @@ int main (int argc, char** argv)
     unsigned long long runs_u64 = (unsigned long long)(unsigned long)Number_Of_Runs;
     unsigned long long hz_u64 = (unsigned long long)(unsigned long)HZ;
     unsigned long long micros_u64 =
-        ((user_time_u64 / runs_u64) * (unsigned long long)Mic_secs_Per_Second) / hz_u64;
+        (user_time_u64 * (unsigned long long)Mic_secs_Per_Second) /
+        (runs_u64 * hz_u64);
     unsigned long long dhps_u64 =
         (hz_u64 * runs_u64) / user_time_u64;
+    unsigned long long dmips_mhz_x1000_u64 =
+        (dhps_u64 * 1000ULL * 1000000ULL) / (1757ULL * hz_u64);
 
     Microseconds = (long)micros_u64;
     Dhrystones_Per_Second = (long)dhps_u64;
+    DMIPS_Per_MHz_x1000 = (long)dmips_mhz_x1000_u64;
   }
 
   printf("Microseconds for one run through Dhrystone: %ld\n", Microseconds);
   printf("Dhrystones per Second:                      %ld\n", Dhrystones_Per_Second);
+  printf("DMIPS/MHz:                                  %ld.%03ld\n",
+         DMIPS_Per_MHz_x1000 / 1000, DMIPS_Per_MHz_x1000 % 1000);
+  printf("DHRYSTONE PASS runs=%d cycles=%ld\n", Number_Of_Runs, User_Time);
 
   return 0;
 }

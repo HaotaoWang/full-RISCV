@@ -12,3 +12,4 @@ goorm.manifest
 *.hex
 /fpga/Vivado_Project/
 /.Xil/
+/regression/out/

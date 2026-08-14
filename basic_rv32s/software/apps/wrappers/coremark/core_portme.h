@@ -1,11 +1,11 @@
 /*
- * CoreMark portme header for RISC-V bare-metal (RV32IM, 100MHz)
+ * CoreMark portme header for basic_rv32s bare-metal (RV32I, 50 MHz board build)
  */
 #ifndef CORE_PORTME_H
 #define CORE_PORTME_H
 
 #ifndef HAS_FLOAT
-#define HAS_FLOAT 1
+#define HAS_FLOAT 0
 #endif
 
 #ifndef HAS_TIME_H
@@ -33,7 +33,7 @@
 #endif
 
 #ifndef COMPILER_FLAGS
-#define COMPILER_FLAGS "-O2"
+#define COMPILER_FLAGS "-O2 -march=rv32im_zicsr_zifencei -mabi=ilp32"
 #endif
 
 #ifndef MEM_LOCATION
@@ -53,9 +53,10 @@ typedef ee_u32          ee_ptr_int;
 typedef size_t          ee_size_t;
 #define align_mem(x) (void *)(4 + (((ee_ptr_int)(x)-1) & ~3))
 
-/* 64-bit cycle counter via rdcycle/rdcycleh */
-#define CORETIMETYPE uint64_t
-typedef uint64_t CORE_TICKS;
+/* A 32-bit mcycle sample is sufficient for the required 10 second run at
+ * 50 MHz and avoids back-to-back mcycleh/mcycle CSR read hazards. */
+#define CORETIMETYPE uint32_t
+typedef uint32_t CORE_TICKS;
 
 #ifndef SEED_METHOD
 #define SEED_METHOD SEED_VOLATILE

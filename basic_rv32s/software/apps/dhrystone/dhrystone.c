@@ -183,9 +183,13 @@ Enumeration Enum_Par_Val;
 
 void debug_printf(const char* str, ...)
 {
-  // extern int vprintf(const char *fmt, va_list ap);
-  // va_list ap;
-  // va_start(ap, str);
-  // vprintf(str, ap);
-  // va_end(ap);
+#ifdef DHRY_ENABLE_DEBUG
+  extern int vprintf(const char *fmt, va_list ap);
+  va_list ap;
+  va_start(ap, str);
+  vprintf(str, ap);
+  va_end(ap);
+#else
+  (void)str;
+#endif
 }

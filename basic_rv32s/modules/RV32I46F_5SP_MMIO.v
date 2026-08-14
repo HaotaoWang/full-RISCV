@@ -349,6 +349,9 @@ module RV32I46F5SPMMIO #(
     wire [19:0] MEM_raw_imm;
     wire [XLEN-1:0] MEM_csr_read_data;
     wire [XLEN-1:0] MEM_alu_result;
+    wire [XLEN-1:0] trap_value =
+        (trap_status_raw == `TRAP_MISALIGNED_INSTRUCTION &&
+         MEM_opcode == `OPCODE_BRANCH) ? branch_target : MEM_alu_result;
 
     wire [XLEN-1:0] WB_pc;
     wire [XLEN-1:0] WB_pc_plus_4;
@@ -621,7 +624,14 @@ module RV32I46F5SPMMIO #(
     // mem_ready 用于解除流水线停顿。
     // 如果是 MMIO 命中，由于采用了旁路逻辑（1个周期内直接出结果），无需等待，直接 ready = 1
     // 否则，等待 DCache 的 ack
-    assign mem_ready = mmio_uart_status_hit ? 1'b1 : dcache_mem_ack;
+    // A UART TX store must remain in MEM while the transmitter is occupied.
+    // Reporting it complete and suppressing the write in MMIO_Interface loses
+    // bytes during printf.  Status reads and all other MMIO accesses stay
+    // single-cycle.
+    wire mmio_uart_tx_write = MEM_memory_write &&
+                              (mem_physical_address == 32'h10010000);
+    wire mmio_access_ready = !mmio_uart_tx_write || !UART_busy;
+    assign mem_ready = mmio_uart_status_hit ? mmio_access_ready : dcache_mem_ack;
 
     RV32_AXI_Adapter data_axi_adapter (
         .clk(clk),
@@ -849,7 +859,8 @@ module RV32I46F5SPMMIO #(
     assign m_axi_if_awprot = 3'b000;
 
     reg mmio_write_pending;
-    wire mmio_write_fire = MEM_memory_write && mmio_uart_status_hit && !mmio_write_pending;
+    wire mmio_write_fire = MEM_memory_write && mmio_uart_status_hit &&
+                           mmio_access_ready && !mmio_write_pending;
 
     always @(posedge clk or posedge reset) begin
         if (reset)
@@ -923,6 +934,7 @@ module RV32I46F5SPMMIO #(
         .reset(reset),
         .current_pc(pc),
         .trap_status(trap_status),
+        .trap_value(trap_value),
         .ID_pc(ID_pc),
         .EX_pc(EX_pc),
         .MEM_pc(MEM_pc),

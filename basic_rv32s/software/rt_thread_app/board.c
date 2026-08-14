@@ -9,7 +9,9 @@
 #define UART_TX_REG     (*((volatile uint32_t*)0x10010000))
 #define UART_STATUS_REG (*((volatile uint32_t*)0x10010004))
 
+#ifndef SYSTEM_CLOCK
 #define SYSTEM_CLOCK    50000000
+#endif
 #define TICK_CYCLES     (SYSTEM_CLOCK / RT_TICK_PER_SECOND)
 
 extern int _end;

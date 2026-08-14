@@ -11,6 +11,7 @@ module TrapController #(
     input wire [XLEN-1:0] MEM_pc,
     input wire [XLEN-1:0] WB_pc,
     input wire [3:0] trap_status,      // indicates current trap type
+    input wire [XLEN-1:0] trap_value,  // faulting address for mtval/stval
     input wire [XLEN-1:0] csr_read_data,
     input wire [1:0] current_mode,     // 3 for M-Mode, 1 for S-Mode, 0 for U-Mode
     input wire [XLEN-1:0] medeleg,     // exception delegation register
@@ -31,33 +32,36 @@ module TrapController #(
 );
 
 // FSM States
-localparam  IDLE          = 4'b0000,
-            WRITE_EPC     = 4'b0001,
-            WRITE_CAUSE   = 4'b0010,
-            READ_TVEC     = 4'b0011,
-            GOTO_TVEC     = 4'b0100,
+localparam  IDLE          = 5'd0,
+            WRITE_EPC     = 5'd1,
+            WRITE_CAUSE   = 5'd2,
+            READ_TVEC     = 5'd3,
+            GOTO_TVEC     = 5'd4,
             
-            READ_MEPC     = 4'b0101,
-            RETURN_MRET   = 4'b0110,
+            READ_MEPC     = 5'd5,
+            RETURN_MRET   = 5'd6,
             
-            READ_SEPC     = 4'b0111,
-            RETURN_SRET   = 4'b1000,
+            READ_SEPC     = 5'd7,
+            RETURN_SRET   = 5'd8,
 
-            MEM_STANDBY   = 4'b1001,
-            WB_STANDBY    = 4'b1010,
-            RTRE_STANDBY  = 4'b1011,
-            ECALL_EPC_WRITE = 4'b1100,
-            UPDATE_MODE   = 4'b1101,
+            MEM_STANDBY   = 5'd9,
+            WB_STANDBY    = 5'd10,
+            RTRE_STANDBY  = 5'd11,
+            ECALL_EPC_WRITE = 5'd12,
+            UPDATE_MODE   = 5'd13,
             
-            MRET_POP      = 4'b1110,
-            SRET_POP      = 4'b1111;
+            MRET_POP      = 5'd14,
+            SRET_POP      = 5'd15,
+            WRITE_TVAL    = 5'd16;
 
 // traditional FSM state architecture
-reg [3:0] trap_handle_state, next_trap_handle_state;
+reg [4:0] trap_handle_state, next_trap_handle_state;
 reg [3:0] active_trap_status;
 reg [XLEN-1:0] active_trap_pc;
+reg [XLEN-1:0] active_trap_value;
 reg debug_mode_reg; 
 reg trap_armed;
+reg trap_none_seen;
 
 // A trap request is a level that may disappear while the pre-trap FSM is
 // running (most notably after UPDATE_MODE clears mstatus.MIE).  Keep the cause
@@ -103,13 +107,16 @@ always @(posedge clk or posedge reset) begin
         trap_handle_state <= IDLE;
         active_trap_status <= `TRAP_NONE;
         active_trap_pc <= {XLEN{1'b0}};
+        active_trap_value <= {XLEN{1'b0}};
         debug_mode_reg <= 1'b0; 
         trap_armed <= 1'b1;
+        trap_none_seen <= 1'b0;
     end else begin
         trap_handle_state <= next_trap_handle_state;
         if ((trap_handle_state == IDLE) && (trap_status != `TRAP_NONE)) begin
             active_trap_status <= trap_status;
             active_trap_pc <= incoming_trap_pc;
+            active_trap_value <= trap_value;
         end else if ((trap_handle_state != IDLE) && (next_trap_handle_state == IDLE)) begin
             active_trap_status <= `TRAP_NONE;
         end
@@ -118,10 +125,24 @@ always @(posedge clk or posedge reset) begin
         // accept that stale level as a second trap (especially a second
         // mret, which would pop mstatus twice).  Rearm only after the source
         // has actually returned to NONE.
-        if ((trap_handle_state != IDLE) && (next_trap_handle_state == IDLE))
+        if ((trap_handle_state != IDLE) && (next_trap_handle_state == IDLE)) begin
             trap_armed <= 1'b0;
-        else if ((trap_handle_state == IDLE) && (trap_status == `TRAP_NONE))
-            trap_armed <= 1'b1;
+            trap_none_seen <= 1'b0;
+        end else if (!trap_armed) begin
+            // ExceptionDetector is registered. Require two complete idle
+            // samples at NONE before accepting another request, preventing a
+            // just-cleared level interrupt from being queued a second time.
+            if ((trap_handle_state == IDLE) && (trap_status == `TRAP_NONE)) begin
+                if (trap_none_seen)
+                    trap_armed <= 1'b1;
+                else
+                    trap_none_seen <= 1'b1;
+            end else begin
+                trap_none_seen <= 1'b0;
+            end
+        end else begin
+            trap_none_seen <= 1'b0;
+        end
         // debug_mode logics
         case (handled_trap_status)
             `TRAP_MRET: begin
@@ -241,6 +262,19 @@ always @(*) begin
                     csr_write_enable = 1'b1;
                     csr_trap_address = delegated_to_s ? 12'h142 : 12'h342; // scause or mcause
                     csr_trap_write_data = exception_cause;
+                    trap_done = 1'b0;
+                    if (handled_trap_status == `TRAP_MISALIGNED_INSTRUCTION ||
+                        handled_trap_status == `TRAP_MISALIGNED_LOAD ||
+                        handled_trap_status == `TRAP_MISALIGNED_STORE)
+                        next_trap_handle_state = WRITE_TVAL;
+                    else
+                        next_trap_handle_state = UPDATE_MODE;
+                end
+
+                WRITE_TVAL: begin
+                    csr_write_enable = 1'b1;
+                    csr_trap_address = delegated_to_s ? 12'h143 : 12'h343;
+                    csr_trap_write_data = active_trap_value;
                     trap_done = 1'b0;
                     next_trap_handle_state = UPDATE_MODE;
                 end

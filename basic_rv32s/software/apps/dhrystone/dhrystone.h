@@ -99,8 +99,12 @@
 /* =========================================================
  * User Configuration
  * ========================================================= */
-#define RISCV_CPU_HZ    100000000   /* CPU clock frequency (Hz)  */
+#ifndef RISCV_CPU_HZ
+#define RISCV_CPU_HZ    50000000    /* FPGA CPU clock frequency (Hz) */
+#endif
+#ifndef NUMBER_OF_RUNS
 #define NUMBER_OF_RUNS  10          /* Benchmark iterations      */
+#endif
 /* ========================================================= */
 
 /* variables for time measurement: */

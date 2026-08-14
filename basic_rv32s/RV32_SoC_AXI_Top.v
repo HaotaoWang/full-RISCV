@@ -280,7 +280,7 @@ module RV32_SoC_AXI_Top #(
         .ADDR_WIDTH(32),
         .ID_WIDTH(4),
         .M_BASE_ADDR({32'h02000000, 32'h00000000}),
-        .M_ADDR_WIDTH({32'd24, 32'd16})
+        .M_ADDR_WIDTH({32'd24, RAM_ADDR_WIDTH})
     ) bus_interconnect (
         .clk(clk),
         .rst(rst),

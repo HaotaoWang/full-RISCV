@@ -11,6 +11,14 @@
 #define MMIO_PRINT_ADDR ((volatile uint32_t*)0x10010000)
 #define MMIO_INPUT_ADDR ((volatile uint32_t*)0x10010008) // Not used but updated to safe addr
 
+/* UART TX writes are back-pressured by the MMIO interface until accepted. */
+static void uart_putchar_raw(unsigned char c)
+{
+    if (c == (unsigned char)'\n')
+        *MMIO_PRINT_ADDR = (uint32_t)'\r';
+    *MMIO_PRINT_ADDR = (uint32_t)c;
+}
+
 /* ------------------------------------------------------------------ */
 /* Time functions (100MHz based)                                       */
 /* ------------------------------------------------------------------ */
@@ -75,7 +83,7 @@ static void ungetch(int c)
 #undef putchar
 int putchar(int c)
 {
-    *MMIO_PRINT_ADDR = (uint32_t)(unsigned char)c;
+    uart_putchar_raw((unsigned char)c);
     return (unsigned char)c;
 }
 
@@ -251,7 +259,7 @@ static void vprintfmt(void (*putch)(int, void **), void **putdat,
 static void putch_stdout(int c, void **unused)
 {
     (void)unused;
-    *MMIO_PRINT_ADDR = (uint32_t)(unsigned char)c;
+    uart_putchar_raw((unsigned char)c);
 }
 
 #undef printf

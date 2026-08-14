@@ -10,7 +10,8 @@
 module axi_clint #(
     parameter DATA_WIDTH = 32,
     parameter ADDR_WIDTH = 32,
-    parameter ID_WIDTH = 4
+    parameter ID_WIDTH = 4,
+    parameter DEBUG = 0
 ) (
     input  wire clk,
     input  wire rst,
@@ -62,10 +63,10 @@ module axi_clint #(
     assign timer_irq = (mtime >= mtimecmp);
 
     always @(posedge clk) begin
-        if (s_axi_wvalid && s_axi_wready && s_axi_awvalid && s_axi_awready) begin
+        if (DEBUG && s_axi_wvalid && s_axi_wready && s_axi_awvalid && s_axi_awready) begin
             $display("[%0d] CLINT WRITE: addr=%x, data=%x, mtime=%d", $time, s_axi_awaddr, s_axi_wdata, mtime);
         end
-        if (mtime == mtimecmp && !rst) begin
+        if (DEBUG && mtime == mtimecmp && !rst) begin
              $display("[%0d] CLINT TIMER_IRQ ACTIVE! mtime=%d, mtimecmp=%d", $time, mtime, mtimecmp);
         end
     end
